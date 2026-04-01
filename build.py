@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -7,10 +8,28 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-PROJECT_DIR = ROOT / "simulator" / "marlin-2.1.2.6"
 BUILD_ENV = "STM32F446ZE_btt"
+PROJECT_DIR_CANDIDATES = (
+    ROOT / "marlin-2.1.2.6",
+    ROOT / "simulator" / "marlin-2.1.2.6",
+)
+SD_ROOT = Path(os.environ.get("OCTOPUS_SD_ROOT", r"E:\\"))
+
+
+def resolve_project_dir() -> Path:
+    for candidate in PROJECT_DIR_CANDIDATES:
+        if (candidate / "platformio.ini").exists():
+            return candidate
+
+    checked = "\n".join(f"- {path}" for path in PROJECT_DIR_CANDIDATES)
+    raise FileNotFoundError(
+        "Could not find the Marlin PlatformIO project directory. Checked:\n"
+        f"{checked}"
+    )
+
+
+PROJECT_DIR = resolve_project_dir()
 FIRMWARE_SRC = PROJECT_DIR / ".pio" / "build" / BUILD_ENV / "firmware.bin"
-SD_ROOT = Path(r"E:\\")
 FIRMWARE_DST = SD_ROOT / "firmware.bin"
 FIRMWARE_CUR = SD_ROOT / "FIRMWARE.CUR"
 
@@ -39,7 +58,7 @@ def copy_firmware() -> None:
 
 
 def main() -> int:
-    print("Building firmware...")
+    print(f"Building firmware from {PROJECT_DIR}...")
     run_build()
     remove_old_cur()
     copy_firmware()
