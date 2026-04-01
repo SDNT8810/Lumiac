@@ -1,0 +1,7 @@
+; Preset 1: move all actuators to 50 mm
+; If already away from home, back off 5 mm first for a smoother settle.
+G90
+G91
+G1 X-5 Y-5 Z-5 A-5 B-5 C-5 F200
+G90
+G1 X50 Y50 Z50 A50 B50 C50 F200

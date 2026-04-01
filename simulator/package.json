@@ -1,0 +1,9 @@
+{
+  "name": "hexapod-leg-simulator",
+  "version": "1.0.0",
+  "description": "Simple localhost simulator for a 6-leg spider with coupled joints.",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  }
+}

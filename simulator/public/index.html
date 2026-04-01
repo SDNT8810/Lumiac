@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hexapod Simulator</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <section class="panel panel-left">
+        <div class="panel-head">
+          <h1>Hexapod Motion Simulator</h1>
+          <p>Drive six motors directly or load a program file from disk.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Direct Motor Control</h2>
+            <button id="resetPoseButton" class="ghost-button" type="button">Reset Pose</button>
+          </div>
+          <div id="motorControls" class="motor-grid"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Feed Rate</h2>
+            <span id="feedReadout">F200</span>
+          </div>
+          <div class="feed-row">
+            <input id="feedSlider" type="range" min="10" max="2000" step="10" value="200" />
+            <input id="feedNumber" type="number" min="10" max="2000" step="10" value="200" />
+          </div>
+          <p class="source-note">Used as the default feed for manual slider moves and commands without an explicit <code>F</code>.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Program File</h2>
+            <div class="button-row">
+              <button id="reloadProgramButton" class="ghost-button" type="button">Choose Input File</button>
+              <button id="runProgramButton" type="button">Run Program</button>
+              <button id="stopProgramButton" class="ghost-button" type="button">Stop</button>
+            </div>
+          </div>
+
+          <input id="programFileInput" type="file" accept=".txt,.nc,.gcode,.tap" hidden />
+          <p id="sourceNote" class="source-note">Source file: none selected</p>
+          <textarea id="gcodeInput" spellcheck="false" placeholder="Choose an input file, or paste a program here."></textarea>
+
+          <div class="hint-list">
+            <p>Supported moves: <code>G0</code>, <code>G1</code>, <code>G4 P...</code></p>
+            <p>Infinite repeat: add <code>@LOOP</code> on its own line</p>
+            <p>Axes map to legs 1-6: <code>X Y Z A B C</code></p>
+            <p>Range per motor: <code>0</code> to <code>120</code></p>
+            <p>Click <code>Choose Input File</code> to load any local program file.</p>
+          </div>
+        </div>
+
+        <div class="card status-card">
+          <h2>Status</h2>
+          <p id="statusLine">Idle</p>
+        </div>
+      </section>
+
+      <section class="panel panel-right">
+        <div class="canvas-frame">
+          <canvas id="simCanvas" width="1200" height="800"></canvas>
+        </div>
+      </section>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+  </html>
