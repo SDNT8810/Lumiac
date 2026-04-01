@@ -37,6 +37,9 @@ constexpr uint32_t kDimmerStepMs = 180;
 constexpr uint8_t kDimmerStep = 16;
 constexpr uint32_t kHttpTimeoutMs = 1500;
 constexpr uint32_t kHttpFailureLogMs = 4000;
+constexpr uint32_t kHealthCheckMs = 60000;
+constexpr uint32_t kLowHeapThresholdBytes = 25000;
+constexpr uint8_t kLowHeapStrikeLimit = 3;
 constexpr uint32_t kLoopDelayMs = 8;
 
 enum ButtonIndex : size_t {
@@ -84,12 +87,16 @@ uint32_t lastStatePollMs = 0;
 uint32_t lastDimmerStepMs = 0;
 uint32_t lastHttpFailureLogMs = 0;
 uint32_t lastUserActivityMs = 0;
+uint32_t lastHealthCheckMs = 0;
 wl_status_t lastWifiStatus = WL_IDLE_STATUS;
 bool pendingButtonPress[kButtonCount] = { false, false, false, false, false, false, false };
+uint8_t lowHeapStrikeCount = 0;
 
 String baseUrl() {
   return String("http://") + kOctopusIp.toString();
 }
+
+void sendRemoteLog(const String& message);
 
 void logLocal(const String& message) {
   Serial.println("[" + String(kBoardName) + "] " + message);
@@ -116,6 +123,26 @@ void logHttpFailure(const String& message) {
   if (now - lastHttpFailureLogMs < kHttpFailureLogMs) return;
   lastHttpFailureLogMs = now;
   logLocal(message);
+}
+
+void healthCheck() {
+  const uint32_t now = millis();
+  if (now - lastHealthCheckMs < kHealthCheckMs) return;
+  lastHealthCheckMs = now;
+
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  if (freeHeap >= kLowHeapThresholdBytes) {
+    lowHeapStrikeCount = 0;
+    return;
+  }
+
+  ++lowHeapStrikeCount;
+  logLocal("Low heap detected: free=" + String(freeHeap) + " bytes.");
+  if (lowHeapStrikeCount < kLowHeapStrikeLimit) return;
+
+  sendRemoteLog("Heap remained critically low. Restarting ESP_Remote for self-recovery.");
+  delay(100);
+  ESP.restart();
 }
 
 bool postJson(const char* path, const JsonDocument& request, JsonDocument* response) {
@@ -530,5 +557,6 @@ void loop() {
   processPendingCommands();
   handleDimmerHold();
   enterLightSleepIfIdle();
+  healthCheck();
   delay(kLoopDelayMs);
 }

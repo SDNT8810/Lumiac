@@ -23,6 +23,9 @@ const IPAddress kRemoteIp(192, 168, 4, 2);
 constexpr int kOctopusTxPin = 17;
 constexpr int kOctopusRxPin = 16;
 constexpr uint32_t kOctopusBaud = 115200;
+constexpr int kOctopusResetPin = 23;
+constexpr bool kOctopusResetActiveLow = true;
+constexpr uint32_t kOctopusResetPulseMs = 250;
 
 // Drive the six lamps through a transistor / MOSFET. Do not power them directly from the ESP32 pin.
 constexpr int kLampPwmPin = 18;
@@ -35,6 +38,13 @@ constexpr uint32_t kStatePollMs = 500;
 constexpr uint32_t kRandomCodePollMs = 15000;
 constexpr uint32_t kRemoteOfflineMs = 20000;
 constexpr uint32_t kOctopusOfflineMs = 5000;
+constexpr uint32_t kOctopusRecoveryRetryMs = 3000;
+constexpr uint32_t kOctopusSerialReinitMs = 30000;
+constexpr uint32_t kOctopusHardwareResetTimeoutMs = 120000;
+constexpr uint32_t kOctopusResetCooldownMs = 180000;
+constexpr uint32_t kHealthCheckMs = 60000;
+constexpr uint32_t kLowHeapThresholdBytes = 30000;
+constexpr uint8_t kLowHeapStrikeLimit = 3;
 constexpr size_t kSerialLineMax = 256;
 constexpr size_t kMaxRandomCodes = 16;
 constexpr size_t kLogHistorySize = 120;
@@ -65,14 +75,26 @@ int currentFeedRate = 200;
 
 uint32_t lastStatePollMs = 0;
 uint32_t lastRandomCodeQueryMs = 0;
-uint32_t lastOctopusActivityMs = 0;
+uint32_t lastOctopusRxMs = 0;
+uint32_t lastOctopusRecoveryMs = 0;
+uint32_t lastOctopusSerialReinitMs = 0;
+uint32_t lastOctopusHardwareResetMs = 0;
 uint32_t lastRemoteActivityMs = 0;
+uint32_t lastHealthCheckMs = 0;
+uint8_t lowHeapStrikeCount = 0;
 
 String serialLine;
 String remoteIpString = kRemoteIp.toString();
 String logHistory[kLogHistorySize];
 size_t logHistoryStart = 0;
 size_t logHistoryCount = 0;
+
+void initStringStorage() {
+  serialLine.reserve(kSerialLineMax);
+  remoteIpString.reserve(16);
+  for (size_t i = 0; i < kLogHistorySize; ++i)
+    logHistory[i].reserve(128);
+}
 
 int axisIndexForLabel(const char axis) {
   for (size_t i = 0; i < kAxisCount; ++i) {
@@ -214,7 +236,6 @@ void sendToOctopus(const String& line, const String& source = kBoardName, const 
     logMessage(source, String("TX -> Octopus: ") + line);
   octopusSerial.print(line);
   octopusSerial.print('\n');
-  lastOctopusActivityMs = millis();
 }
 
 void setLightState(const bool on, const uint8_t brightness, const String& source, const String& reason) {
@@ -313,7 +334,7 @@ void parsePositionLine(const String& line) {
 
   if (found) {
     octopusOnline = true;
-    lastOctopusActivityMs = millis();
+    lastOctopusRxMs = millis();
     broadcastState();
   }
 }
@@ -349,14 +370,12 @@ void handleOctopusLine(const String& rawLine) {
   if (!line.length()) return;
 
   logMessage("Octopus", line);
+  lastOctopusRxMs = millis();
   parsePositionLine(line);
   parseRandomCodeLine(line);
 
   if (line.startsWith("FIRMWARE_NAME:"))
     octopusOnline = true;
-
-  if (line.indexOf("start") >= 0 || line.indexOf("ok") >= 0)
-    lastOctopusActivityMs = millis();
 }
 
 void pollOctopusState() {
@@ -370,6 +389,71 @@ void pollRandomCodes() {
   const uint32_t now = millis();
   if (randomCodeCount || now - lastRandomCodeQueryMs < kRandomCodePollMs) return;
   queryRandomCodes(kBoardName);
+}
+
+void pulseOctopusResetLine(const String& reason) {
+  logMessage(kBoardName, "Pulsing Octopus reset line: " + reason);
+
+  octopusOnline = false;
+  waitingForRandomCodeList = false;
+  serialLine = "";
+  broadcastState();
+
+  digitalWrite(kOctopusResetPin, kOctopusResetActiveLow ? LOW : HIGH);
+  delay(kOctopusResetPulseMs);
+  digitalWrite(kOctopusResetPin, kOctopusResetActiveLow ? HIGH : LOW);
+
+  lastOctopusHardwareResetMs = millis();
+  lastOctopusRecoveryMs = lastOctopusHardwareResetMs;
+  lastOctopusSerialReinitMs = lastOctopusHardwareResetMs;
+
+  octopusSerial.end();
+  delay(50);
+  octopusSerial.begin(kOctopusBaud, SERIAL_8N1, kOctopusRxPin, kOctopusTxPin);
+}
+
+void recoverOctopusLink() {
+  const uint32_t now = millis();
+
+  if (!octopusOnline && now - lastOctopusRecoveryMs >= kOctopusRecoveryRetryMs) {
+    lastOctopusRecoveryMs = now;
+    sendToOctopus("M115", kBoardName, false);
+  }
+
+  if (now - lastOctopusRxMs < kOctopusSerialReinitMs) return;
+  if (now - lastOctopusSerialReinitMs < kOctopusSerialReinitMs) return;
+
+  lastOctopusSerialReinitMs = now;
+  logMessage(kBoardName, "Octopus serial RX timeout persisted. Reinitializing UART2.");
+  octopusSerial.end();
+  delay(20);
+  octopusSerial.begin(kOctopusBaud, SERIAL_8N1, kOctopusRxPin, kOctopusTxPin);
+  sendToOctopus("M115", kBoardName, false);
+
+  if (now - lastOctopusRxMs < kOctopusHardwareResetTimeoutMs) return;
+  if (now - lastOctopusHardwareResetMs < kOctopusResetCooldownMs) return;
+
+  pulseOctopusResetLine("No serial RX after staged retry and UART reinit");
+}
+
+void healthCheck() {
+  const uint32_t now = millis();
+  if (now - lastHealthCheckMs < kHealthCheckMs) return;
+  lastHealthCheckMs = now;
+
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  if (freeHeap >= kLowHeapThresholdBytes) {
+    lowHeapStrikeCount = 0;
+    return;
+  }
+
+  ++lowHeapStrikeCount;
+  logMessage(kBoardName, "Low heap detected: free=" + String(freeHeap) + " bytes.");
+  if (lowHeapStrikeCount < kLowHeapStrikeLimit) return;
+
+  logMessage(kBoardName, "Heap remained critically low. Restarting ESP_Octopus for self-recovery.");
+  delay(100);
+  ESP.restart();
 }
 
 void readOctopusSerial() {
@@ -598,8 +682,11 @@ void setupWebSocket() {
 
 void setup() {
   Serial.begin(115200);
-  serialLine.reserve(kSerialLineMax);
+  initStringStorage();
   randomSeed(micros());
+
+  pinMode(kOctopusResetPin, OUTPUT_OPEN_DRAIN);
+  digitalWrite(kOctopusResetPin, kOctopusResetActiveLow ? HIGH : LOW);
 
   ledcSetup(kLampPwmChannel, kLampPwmFrequency, kLampPwmResolution);
   ledcAttachPin(kLampPwmPin, kLampPwmChannel);
@@ -618,6 +705,7 @@ void setup() {
 
   logMessage(kBoardName, String("Access point ready at http://") + WiFi.softAPIP().toString());
   logMessage(kBoardName, String("PWM output ready on GPIO ") + kLampPwmPin);
+  logMessage(kBoardName, String("Octopus reset line ready on GPIO ") + kOctopusResetPin);
 
   delay(300);
   sendToOctopus("M115");
@@ -634,11 +722,13 @@ void loop() {
   readOctopusSerial();
   pollOctopusState();
   pollRandomCodes();
+  recoverOctopusLink();
+  healthCheck();
 
   const uint32_t now = millis();
-  if (octopusOnline && now - lastOctopusActivityMs > kOctopusOfflineMs) {
+  if (octopusOnline && now - lastOctopusRxMs > kOctopusOfflineMs) {
     octopusOnline = false;
-    logMessage(kBoardName, "Octopus serial heartbeat timed out.");
+    logMessage(kBoardName, "Octopus serial RX heartbeat timed out.");
     broadcastState();
   }
 
