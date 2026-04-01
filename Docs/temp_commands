@@ -1,0 +1,26 @@
+G1 X0 Y0 Z0 A0 B0 C0 F150
+G1 X10 Y10 Z10 A10 B10 C10 F150
+G1 X20 Y20 Z20 A20 B20 C20 F150
+
+## Home all axes
+G28 X Y Z A B C
+
+## Costume commands
+M215 H      # Home all axes
+M215 P      # Pause 
+M215 X      # Stop
+M215 S1:n   # Run G-code from file n
+M215 P1     # Go to position 1
+M215 P2     # Go to position 2
+
+## Common G-code commands
+G0 X0 Y0 Z0 A0 B0 C0 F150           # Rapid move to position
+G1 X10 Y10 Z10 A10 B10 C10 F150     # Linear
+G28 X Y Z A B C                     # Home all axes
+G90                                 # Absolute positioning
+G91                                 # Relative positioning
+M410                                # Quick stop
+F200                                # Set feedrate
+M140                                # Stop all motion
+M119                                # Get endstop status
+M114                                # Get current position

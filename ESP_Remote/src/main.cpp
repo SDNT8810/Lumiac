@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <esp_sleep.h>
 
 namespace {
 
@@ -27,11 +28,16 @@ constexpr uint8_t kSparePin = 33;
 
 constexpr uint32_t kDebounceMs = 35;
 constexpr uint32_t kWifiRetryMs = 5000;
-constexpr uint32_t kStatePollMs = 1500;
+constexpr uint32_t kButtonTriggeredWifiRetryMs = 1000;
+constexpr uint32_t kFastStatePollMs = 1500;
+constexpr uint32_t kIdleStatePollMs = 12000;
+constexpr uint32_t kFastPollingWindowMs = 6000;
+constexpr uint32_t kSleepAfterIdleMs = 45000;
 constexpr uint32_t kDimmerStepMs = 180;
 constexpr uint8_t kDimmerStep = 16;
-constexpr uint32_t kHttpTimeoutMs = 2000;
+constexpr uint32_t kHttpTimeoutMs = 1500;
 constexpr uint32_t kHttpFailureLogMs = 4000;
+constexpr uint32_t kLoopDelayMs = 8;
 
 enum ButtonIndex : size_t {
   kButtonLightOn = 0,
@@ -77,7 +83,9 @@ uint32_t lastWifiRetryMs = 0;
 uint32_t lastStatePollMs = 0;
 uint32_t lastDimmerStepMs = 0;
 uint32_t lastHttpFailureLogMs = 0;
+uint32_t lastUserActivityMs = 0;
 wl_status_t lastWifiStatus = WL_IDLE_STATUS;
+bool pendingButtonPress[kButtonCount] = { false, false, false, false, false, false, false };
 
 String baseUrl() {
   return String("http://") + kOctopusIp.toString();
@@ -85,6 +93,15 @@ String baseUrl() {
 
 void logLocal(const String& message) {
   Serial.println("[" + String(kBoardName) + "] " + message);
+}
+
+void noteUserActivity() {
+  const uint32_t now = millis();
+  lastUserActivityMs = now;
+}
+
+uint32_t currentStatePollInterval() {
+  return millis() - lastUserActivityMs < kFastPollingWindowMs ? kFastStatePollMs : kIdleStatePollMs;
 }
 
 void applyStateFromJson(JsonVariantConst payload) {
@@ -212,17 +229,69 @@ bool sendAction(const String& action, const int brightnessOverride = -1) {
   if (!postJson("/api/command", request, &response)) return false;
 
   applyStateFromJson(response.as<JsonVariantConst>());
+  noteUserActivity();
   return true;
 }
 
 void connectWifi() {
   WiFi.disconnect(false, true);
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
+  WiFi.setSleep(true);
+  WiFi.setAutoReconnect(true);
   WiFi.setHostname(kBoardName);
   WiFi.config(kLocalIp, kGatewayIp, kSubnetMask, kDnsIp);
   WiFi.begin(kWifiSsid, kWifiPassword);
   lastWifiRetryMs = millis();
+}
+
+bool isButtonCurrentlyPressed(const ButtonIndex index) {
+  return digitalRead(buttons[index].pin) == LOW;
+}
+
+bool isAnyButtonPressed() {
+  for (size_t i = 0; i < kButtonCount; ++i) {
+    if (isButtonCurrentlyPressed(static_cast<ButtonIndex>(i)))
+      return true;
+  }
+  return false;
+}
+
+bool dispatchDiscreteCommand(const ButtonIndex index) {
+  bool success = false;
+
+  switch (index) {
+    case kButtonLightOn:
+      logLocal("LIGHT_ON pressed.");
+      success = sendAction("light_on");
+      break;
+    case kButtonLightOff:
+      logLocal("LIGHT_OFF pressed.");
+      success = sendAction("light_off");
+      break;
+    case kButtonPos1:
+      logLocal("POS1 pressed.");
+      success = sendAction("pos1");
+      break;
+    case kButtonPos2:
+      logLocal("POS2 pressed.");
+      success = sendAction("pos2");
+      break;
+    case kButtonRandom:
+      logLocal("RANDOM pressed.");
+      success = sendAction("random_position");
+      break;
+    case kButtonSpare:
+      logLocal("SPARE button pressed. No action assigned.");
+      sendRemoteLog("Spare button pressed. No action assigned.");
+      return true;
+    default:
+      return false;
+  }
+
+  if (!success)
+    logHttpFailure("Command failed for button " + String(buttons[index].name));
+  return success;
 }
 
 void logPinMap() {
@@ -269,47 +338,34 @@ void pollState() {
   if (WiFi.status() != WL_CONNECTED) return;
 
   const uint32_t now = millis();
-  if (now - lastStatePollMs < kStatePollMs) return;
+  if (now - lastStatePollMs < currentStatePollInterval()) return;
   lastStatePollMs = now;
 
   if (fetchState()) return;
   logHttpFailure("State poll from ESP_Octopus failed.");
 }
 
-void handleDiscreteCommand(const ButtonIndex index) {
-  bool success = false;
+bool ensureWifiReadyForButton(const char* buttonName) {
+  if (WiFi.status() == WL_CONNECTED) return true;
 
-  switch (index) {
-    case kButtonLightOn:
-      logLocal("LIGHT_ON pressed.");
-      success = sendAction("light_on");
-      break;
-    case kButtonLightOff:
-      logLocal("LIGHT_OFF pressed.");
-      success = sendAction("light_off");
-      break;
-    case kButtonPos1:
-      logLocal("POS1 pressed.");
-      success = sendAction("pos1");
-      break;
-    case kButtonPos2:
-      logLocal("POS2 pressed.");
-      success = sendAction("pos2");
-      break;
-    case kButtonRandom:
-      logLocal("RANDOM pressed.");
-      success = sendAction("random_position");
-      break;
-    case kButtonSpare:
-      logLocal("SPARE button pressed. No action assigned.");
-      sendRemoteLog("Spare button pressed. No action assigned.");
-      return;
-    default:
-      return;
+  const uint32_t now = millis();
+  if (now - lastWifiRetryMs >= kButtonTriggeredWifiRetryMs) {
+    logLocal(String(buttonName) + " pressed while Wi-Fi is down. Retrying connection now.");
+    connectWifi();
+  }
+  return false;
+}
+
+void handleDiscreteCommand(const ButtonIndex index) {
+  noteUserActivity();
+
+  if (!ensureWifiReadyForButton(buttons[index].name)) {
+    pendingButtonPress[index] = true;
+    return;
   }
 
-  if (!success)
-    logHttpFailure("Command failed for button " + String(buttons[index].name));
+  pendingButtonPress[index] = false;
+  dispatchDiscreteCommand(index);
 }
 
 void handleDimmerStep() {
@@ -331,6 +387,14 @@ void handleDimmerStep() {
 
 void handleButtonPressed(const ButtonIndex index) {
   if (index == kButtonDimmer) {
+    noteUserActivity();
+
+    if (!ensureWifiReadyForButton(buttons[index].name)) {
+      pendingButtonPress[index] = true;
+      return;
+    }
+
+    pendingButtonPress[index] = false;
     dimmerPressed = true;
     lastDimmerStepMs = 0;
     const String direction = dimmerDirection > 0 ? "up" : "down";
@@ -343,8 +407,11 @@ void handleButtonPressed(const ButtonIndex index) {
 }
 
 void handleButtonReleased(const ButtonIndex index) {
+  noteUserActivity();
+
   if (index != kButtonDimmer) return;
 
+  pendingButtonPress[index] = false;
   if (!dimmerPressed) return;
 
   dimmerPressed = false;
@@ -387,6 +454,61 @@ void handleDimmerHold() {
   handleDimmerStep();
 }
 
+void processPendingCommands() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  for (size_t i = 0; i < kButtonCount; ++i) {
+    if (!pendingButtonPress[i]) continue;
+
+    const ButtonIndex index = static_cast<ButtonIndex>(i);
+    if (index == kButtonDimmer) {
+      if (!isButtonCurrentlyPressed(index)) {
+        pendingButtonPress[i] = false;
+        continue;
+      }
+
+      pendingButtonPress[i] = false;
+      dimmerPressed = true;
+      lastDimmerStepMs = 0;
+      const String direction = dimmerDirection > 0 ? "up" : "down";
+      logLocal("DIMMER resumed after reconnect. Direction=" + direction);
+      sendRemoteLog("Dimmer resumed after reconnect. Direction=" + direction);
+      noteUserActivity();
+      continue;
+    }
+
+    pendingButtonPress[i] = false;
+    logLocal(String("Sending queued button action for ") + buttons[i].name + ".");
+    dispatchDiscreteCommand(index);
+  }
+}
+
+void enterLightSleepIfIdle() {
+  if (dimmerPressed) return;
+  if (isAnyButtonPressed()) return;
+  if (millis() - lastUserActivityMs < kSleepAfterIdleMs) return;
+
+  logLocal("Idle timeout reached. Turning Wi-Fi off and entering light sleep.");
+  WiFi.disconnect(false, true);
+  WiFi.mode(WIFI_OFF);
+  lastWifiStatus = WL_DISCONNECTED;
+
+  for (size_t i = 0; i < kButtonCount; ++i)
+    gpio_wakeup_enable(static_cast<gpio_num_t>(buttons[i].pin), GPIO_INTR_LOW_LEVEL);
+
+  esp_sleep_enable_gpio_wakeup();
+  delay(20);
+  esp_light_sleep_start();
+
+  for (size_t i = 0; i < kButtonCount; ++i)
+    gpio_wakeup_disable(static_cast<gpio_num_t>(buttons[i].pin));
+
+  logLocal("Woke from light sleep. Reconnecting Wi-Fi.");
+  noteUserActivity();
+  lastStatePollMs = 0;
+  connectWifi();
+}
+
 } // namespace
 
 void setup() {
@@ -397,6 +519,7 @@ void setup() {
     pinMode(button.pin, INPUT_PULLUP);
 
   logPinMap();
+  noteUserActivity();
   connectWifi();
 }
 
@@ -404,5 +527,8 @@ void loop() {
   handleWifiState();
   pollState();
   pollButtons();
+  processPendingCommands();
   handleDimmerHold();
+  enterLightSleepIfIdle();
+  delay(kLoopDelayMs);
 }

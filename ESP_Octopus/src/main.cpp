@@ -33,7 +33,7 @@ constexpr bool kLampPwmActiveHigh = true;
 
 constexpr uint32_t kStatePollMs = 500;
 constexpr uint32_t kRandomCodePollMs = 15000;
-constexpr uint32_t kRemoteOfflineMs = 5000;
+constexpr uint32_t kRemoteOfflineMs = 20000;
 constexpr uint32_t kOctopusOfflineMs = 5000;
 constexpr size_t kSerialLineMax = 256;
 constexpr size_t kMaxRandomCodes = 16;
