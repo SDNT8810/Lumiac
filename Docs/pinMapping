@@ -1,0 +1,28 @@
+ESP_Octopus
+- Board role: Wi-Fi access point, web portal, Octopus serial bridge, light PWM controller
+- Wi-Fi AP SSID: ESP_Octopus
+- Wi-Fi AP password: octopus123
+- Fixed IP: 192.168.4.1
+- UART to Octopus board:
+  - GPIO16 -> RX from Octopus TX
+  - GPIO17 -> TX to Octopus RX
+- Light PWM output:
+  - GPIO18 -> PWM output for all 6 lamps through transistor/MOSFET driver
+
+ESP_Remote
+- Board role: handheld remote with 7 push buttons, fixed-IP Wi-Fi client
+- Fixed IP: 192.168.4.2
+- Gateway / ESP_Octopus IP: 192.168.4.1
+- Buttons use INPUT_PULLUP and are active-low:
+  - GPIO13 -> Lights On
+  - GPIO14 -> Lights Off
+  - GPIO25 -> Pos1
+  - GPIO26 -> Pos2
+  - GPIO27 -> Random Position
+  - GPIO32 -> Dimmer / hold-to-change-brightness
+  - GPIO33 -> Spare / reserved
+
+Notes
+- Do not drive the lamps directly from GPIO18. Use a proper transistor or MOSFET stage sized for the lamp current.
+- The dimmer button changes brightness in steps while held. On release, direction flips for the next hold.
+- Browser control is hosted by ESP_Octopus at http://192.168.4.1/

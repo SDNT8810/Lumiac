@@ -240,10 +240,11 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
       <section class="panel panel-left">
         <div class="panel-head">
           <h1>ESP Octopus Control</h1>
-          <p class="muted">Access-point control page for Octopus serial G-code, live robot state, and direct pose moves.</p>
+          <p class="muted">Access-point control page for Octopus serial G-code, shared light control, remote logs, and live robot state.</p>
           <div class="chip-row">
             <span id="wsStatus" class="chip">Connecting...</span>
             <span id="octopusStatus" class="chip">Octopus: unknown</span>
+            <span id="remoteStatus" class="chip">Remote: waiting</span>
           </div>
         </div>
 
@@ -257,6 +258,22 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
             <input id="feedNumber" type="number" min="10" max="2000" step="10" value="200" />
           </div>
           <p class="muted">Used for direct pose commands sent from this page.</p>
+        </div>
+
+        <div class="card feed-card">
+          <div class="card-head">
+            <h2>Lights</h2>
+            <span id="lightsReadout">OFF · 160/255</span>
+          </div>
+          <div class="button-row">
+            <button id="lightOnButton" type="button">Lights On</button>
+            <button id="lightOffButton" class="ghost" type="button">Lights Off</button>
+          </div>
+          <div class="feed-row">
+            <input id="brightnessSlider" type="range" min="0" max="255" step="1" value="160" />
+            <input id="brightnessNumber" type="number" min="0" max="255" step="1" value="160" />
+          </div>
+          <p class="muted">PWM output is generated on ESP_Octopus and mirrored to the remote state.</p>
         </div>
 
         <div class="card">
@@ -277,9 +294,11 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
               <button id="homeButton" type="button">M215 H</button>
               <button id="pos1Button" class="ghost" type="button">M215 P1</button>
               <button id="pos2Button" class="ghost" type="button">M215 P2</button>
+              <button id="randomButton" type="button">Random Pos</button>
               <button id="stopButton" class="ghost" type="button">M112</button>
             </div>
           </div>
+          <p id="randomCodesLine" class="muted">Random codes: waiting for M215 list...</p>
         </div>
 
         <div class="card">
@@ -300,6 +319,7 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         <div class="card status-card">
           <h2>Status</h2>
           <p id="statusLine" class="muted">Waiting for Octopus...</p>
+          <p id="networkLine" class="muted" style="margin-top: 8px;">AP: 192.168.4.1 · Remote: 192.168.4.2</p>
         </div>
       </section>
 
@@ -333,6 +353,10 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
       const state = {
         connected: false,
         octopusOnline: false,
+        remoteOnline: false,
+        lightsOn: false,
+        brightness: 160,
+        randomCodes: [],
         motors: [...DEFAULT_POSE],
         displayMotors: [...DEFAULT_POSE],
         feedRate: 200,
@@ -342,15 +366,22 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
       const elements = {
         wsStatus: document.getElementById("wsStatus"),
         octopusStatus: document.getElementById("octopusStatus"),
+        remoteStatus: document.getElementById("remoteStatus"),
         motorControls: document.getElementById("motorControls"),
         feedSlider: document.getElementById("feedSlider"),
         feedNumber: document.getElementById("feedNumber"),
         feedReadout: document.getElementById("feedReadout"),
+        lightsReadout: document.getElementById("lightsReadout"),
+        brightnessSlider: document.getElementById("brightnessSlider"),
+        brightnessNumber: document.getElementById("brightnessNumber"),
+        lightOnButton: document.getElementById("lightOnButton"),
+        lightOffButton: document.getElementById("lightOffButton"),
         sendPoseButton: document.getElementById("sendPoseButton"),
         refreshButton: document.getElementById("refreshButton"),
         homeButton: document.getElementById("homeButton"),
         pos1Button: document.getElementById("pos1Button"),
         pos2Button: document.getElementById("pos2Button"),
+        randomButton: document.getElementById("randomButton"),
         stopButton: document.getElementById("stopButton"),
         terminalLog: document.getElementById("terminalLog"),
         commandInput: document.getElementById("commandInput"),
@@ -358,6 +389,8 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         sendSingleButton: document.getElementById("sendSingleButton"),
         clearLogButton: document.getElementById("clearLogButton"),
         statusLine: document.getElementById("statusLine"),
+        networkLine: document.getElementById("networkLine"),
+        randomCodesLine: document.getElementById("randomCodesLine"),
         canvas: document.getElementById("simCanvas"),
       };
 
@@ -388,6 +421,15 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         elements.feedSlider.value = String(next);
         elements.feedNumber.value = String(next);
         elements.feedReadout.textContent = `F${next}`;
+      }
+
+      function updateLightControls(brightness, isOn) {
+        const nextBrightness = clamp(Number.isFinite(brightness) ? brightness : state.brightness, 0, 255);
+        state.brightness = nextBrightness;
+        state.lightsOn = Boolean(isOn) && nextBrightness > 0;
+        elements.brightnessSlider.value = String(nextBrightness);
+        elements.brightnessNumber.value = String(nextBrightness);
+        elements.lightsReadout.textContent = `${state.lightsOn ? "ON" : "OFF"} · ${nextBrightness}/255`;
       }
 
       function createMotorControls() {
@@ -491,6 +533,11 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         sendJson({ type: "cmd", gcode: trimmed });
       }
 
+      function sendAction(action, extra = {}) {
+        appendLog(`> action ${action}`);
+        sendJson({ type: "action", action, ...extra });
+      }
+
       function sendPose() {
         const pose = {};
         LEG_AXES.forEach((axis, index) => {
@@ -502,7 +549,7 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
 
       function connectWebSocket() {
         const protocol = location.protocol === "https:" ? "wss" : "ws";
-        ws = new WebSocket(`${protocol}://${location.host}/ws`);
+        ws = new WebSocket(`${protocol}://${location.hostname}:81/`);
 
         ws.addEventListener("open", () => {
           state.connected = true;
@@ -514,10 +561,13 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         ws.addEventListener("close", () => {
           state.connected = false;
           state.octopusOnline = false;
+          state.remoteOnline = false;
           elements.wsStatus.textContent = "Reconnecting...";
           elements.wsStatus.classList.remove("online");
           elements.octopusStatus.textContent = "Octopus: offline";
           elements.octopusStatus.classList.remove("online");
+          elements.remoteStatus.textContent = "Remote: offline";
+          elements.remoteStatus.classList.remove("online");
           setStatus("WebSocket disconnected. Retrying...");
           setTimeout(connectWebSocket, 1000);
         });
@@ -535,9 +585,20 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
             const nextPose = LEG_AXES.map(axis => clamp(Number(payload.positions?.[axis] ?? 0), MIN_POS, MAX_POS));
             applyPose(nextPose);
             state.octopusOnline = Boolean(payload.octopusOnline);
+            state.remoteOnline = Boolean(payload.remoteOnline);
             elements.octopusStatus.textContent = state.octopusOnline ? "Octopus: online" : "Octopus: waiting";
             elements.octopusStatus.classList.toggle("online", state.octopusOnline);
+            elements.remoteStatus.textContent = state.remoteOnline ? "Remote: online" : "Remote: waiting";
+            elements.remoteStatus.classList.toggle("online", state.remoteOnline);
             if (typeof payload.feed === "number") updateFeed(payload.feed);
+            updateLightControls(Number(payload.lights?.brightness ?? state.brightness), Boolean(payload.lights?.on));
+            state.randomCodes = Array.isArray(payload.randomCodes) ? payload.randomCodes : [];
+            elements.randomCodesLine.textContent = state.randomCodes.length
+              ? `Random codes: ${state.randomCodes.join(", ")}`
+              : "Random codes: waiting for M215 list...";
+            const apIp = payload.accessPoint?.ip ?? "192.168.4.1";
+            const remoteIp = payload.remoteIp ?? "192.168.4.2";
+            elements.networkLine.textContent = `AP: ${apIp} · Remote: ${remoteIp}`;
             return;
           }
 
@@ -707,11 +768,20 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
 
       elements.feedSlider.addEventListener("input", () => updateFeed(Number(elements.feedSlider.value)));
       elements.feedNumber.addEventListener("change", () => updateFeed(Number(elements.feedNumber.value)));
+      elements.brightnessSlider.addEventListener("input", () => updateLightControls(Number(elements.brightnessSlider.value), state.lightsOn || Number(elements.brightnessSlider.value) > 0));
+      elements.brightnessSlider.addEventListener("change", () => sendAction("set_brightness", { brightness: Number(elements.brightnessSlider.value) }));
+      elements.brightnessNumber.addEventListener("change", () => {
+        updateLightControls(Number(elements.brightnessNumber.value), state.lightsOn || Number(elements.brightnessNumber.value) > 0);
+        sendAction("set_brightness", { brightness: Number(elements.brightnessNumber.value) });
+      });
+      elements.lightOnButton.addEventListener("click", () => sendAction("light_on"));
+      elements.lightOffButton.addEventListener("click", () => sendAction("light_off"));
       elements.sendPoseButton.addEventListener("click", sendPose);
-      elements.refreshButton.addEventListener("click", () => sendCommand("M114"));
-      elements.homeButton.addEventListener("click", () => sendCommand("M215 H"));
-      elements.pos1Button.addEventListener("click", () => sendCommand("M215 P1"));
-      elements.pos2Button.addEventListener("click", () => sendCommand("M215 P2"));
+      elements.refreshButton.addEventListener("click", () => sendAction("refresh_positions"));
+      elements.homeButton.addEventListener("click", () => sendAction("home"));
+      elements.pos1Button.addEventListener("click", () => sendAction("pos1"));
+      elements.pos2Button.addEventListener("click", () => sendAction("pos2"));
+      elements.randomButton.addEventListener("click", () => sendAction("random_position"));
       elements.stopButton.addEventListener("click", () => sendCommand("M112"));
       elements.sendCommandButton.addEventListener("click", () => sendCommand(elements.commandInput.value));
       elements.sendSingleButton.addEventListener("click", () => sendCommand(elements.commandInput.value));
@@ -726,6 +796,7 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
 
       createMotorControls();
       updateFeed(200);
+      updateLightControls(160, false);
       resizeCanvas();
       drawScene();
       connectWebSocket();

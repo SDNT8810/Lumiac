@@ -32,3 +32,6 @@ Thumbs.db
 # Logs / temp
 *.log
 *.tmp
+
+Docs/prompt
+/Docs/prompt
