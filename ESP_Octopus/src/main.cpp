@@ -12,6 +12,9 @@ namespace {
 constexpr char kApSsid[] = "ESP_Octopus";
 constexpr char kApPassword[] = "octopus123";
 constexpr byte kDnsPort = 53;
+const IPAddress kApIp(192, 168, 4, 1);
+const IPAddress kApGateway(192, 168, 4, 1);
+const IPAddress kApSubnet(255, 255, 255, 0);
 
 constexpr int kOctopusTxPin = 17;
 constexpr int kOctopusRxPin = 16;
@@ -221,6 +224,7 @@ void setup() {
   octopusSerial.begin(kOctopusBaud, SERIAL_8N1, kOctopusRxPin, kOctopusTxPin);
 
   WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(kApIp, kApGateway, kApSubnet);
   WiFi.softAP(kApSsid, kApPassword);
   dnsServer.start(kDnsPort, "*", WiFi.softAPIP());
 

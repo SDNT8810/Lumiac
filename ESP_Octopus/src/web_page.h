@@ -29,24 +29,26 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
           linear-gradient(180deg, var(--bg) 0%, var(--bg-accent) 100%);
         color: var(--ink);
         font-family: Georgia, "Times New Roman", serif;
+        font-size: 16px;
       }
 
       .app-shell {
         display: grid;
-        grid-template-columns: minmax(330px, 420px) 1fr;
-        gap: 18px;
+        grid-template-columns: 1fr;
+        gap: 14px;
         min-height: 100vh;
-        padding: 18px;
+        padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)) 12px;
       }
 
       .panel {
         display: flex;
         flex-direction: column;
-        gap: 14px;
+        gap: 12px;
       }
 
-      .panel-left { max-height: calc(100vh - 36px); }
+      .panel-left { max-height: none; }
       .panel-right { min-width: 0; }
+      .panel-right { order: -1; }
 
       .card, .canvas-frame {
         background: var(--panel);
@@ -56,10 +58,12 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         backdrop-filter: blur(12px);
       }
 
-      .card { padding: 18px; }
-      .canvas-frame { padding: 12px; min-height: calc(100vh - 36px); }
+      .card { padding: 16px; }
+      .canvas-frame { padding: 10px; min-height: 42vh; }
 
       h1, h2, p { margin: 0; }
+      h1 { font-size: 1.45rem; line-height: 1.1; }
+      h2 { font-size: 1.05rem; }
 
       .panel-head, .card-head {
         display: flex;
@@ -71,24 +75,29 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
       .panel-head {
         align-items: flex-start;
         flex-direction: column;
+        padding: 4px 2px;
       }
 
       .muted { color: var(--muted); }
 
       .button-row, .chip-row {
-        display: flex;
-        flex-wrap: wrap;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
         gap: 8px;
+        width: 100%;
       }
 
       button {
         border: none;
         border-radius: 999px;
-        padding: 10px 16px;
+        padding: 13px 16px;
         background: var(--accent);
         color: #fffaf5;
         cursor: pointer;
         font: inherit;
+        min-height: 48px;
+        font-size: 1rem;
+        touch-action: manipulation;
       }
 
       button.ghost {
@@ -98,10 +107,11 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
 
       .chip {
         border-radius: 999px;
-        padding: 6px 12px;
+        padding: 8px 12px;
         background: rgba(47, 65, 54, 0.08);
         color: var(--muted);
-        font-size: 0.95rem;
+        font-size: 0.93rem;
+        text-align: center;
       }
 
       .chip.online {
@@ -129,9 +139,14 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         margin-bottom: 8px;
       }
 
+      .motor-row label {
+        font-size: 0.98rem;
+        font-weight: 600;
+      }
+
       .motor-inputs {
         display: grid;
-        grid-template-columns: 1fr 88px;
+        grid-template-columns: 1fr 92px;
         gap: 10px;
         align-items: center;
       }
@@ -159,10 +174,11 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         width: 100%;
         border: 1px solid var(--line);
         border-radius: 14px;
-        padding: 10px 12px;
+        padding: 12px 12px;
         background: var(--panel-strong);
         color: var(--ink);
         font: inherit;
+        min-height: 48px;
       }
 
       textarea {
@@ -173,8 +189,8 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
       }
 
       .terminal-log {
-        min-height: 180px;
-        max-height: 28vh;
+        min-height: 150px;
+        max-height: 22vh;
         overflow: auto;
         border: 1px solid var(--line);
         border-radius: 16px;
@@ -186,7 +202,7 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         white-space: pre-wrap;
       }
 
-      .status-card { margin-top: auto; }
+      .status-card { margin-top: 0; }
 
       canvas {
         width: 100%;
@@ -198,10 +214,24 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
           linear-gradient(180deg, rgba(255, 252, 245, 0.92), rgba(232, 239, 231, 0.96));
       }
 
-      @media (max-width: 980px) {
-        .app-shell { grid-template-columns: 1fr; }
-        .panel-left { max-height: none; }
-        .canvas-frame { min-height: 56vh; }
+      @media (min-width: 720px) {
+        .button-row, .chip-row {
+          display: flex;
+          flex-wrap: wrap;
+        }
+      }
+
+      @media (min-width: 1100px) {
+        .app-shell {
+          grid-template-columns: minmax(340px, 430px) 1fr;
+          gap: 18px;
+          padding: 18px;
+        }
+
+        .panel-left { max-height: calc(100vh - 36px); }
+        .panel-right { order: 0; }
+        .canvas-frame { min-height: calc(100vh - 36px); }
+        .terminal-log { max-height: 28vh; }
       }
     </style>
   </head>
