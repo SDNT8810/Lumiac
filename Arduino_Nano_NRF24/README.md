@@ -20,3 +20,5 @@ Long-term design choices
 - watchdog-based self-recovery
 - staged serial/radio recovery on the receiver
 - deep sleep on the remote
+- aggressive `5s` remote idle timeout, based on the older transmitter behavior
+- deeper remote sleep entry by powering down the radio and unused AVR peripherals before sleep

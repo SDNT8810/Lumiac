@@ -32,10 +32,12 @@ Remote_Control Nano
   - other side of button to GND
 
 Remote low-power behavior
-- Remote enters AVR deep sleep after 15 seconds of no user activity
+- Remote enters AVR deep sleep after 5 seconds of no user activity
 - Any button press wakes it through pin-change interrupt
 - Wake event is latched so a short press is not lost during wake-up
 - Radio command retry is automatic while awake
+- Sleep entry powers down the NRF24 and disables ADC, SPI, timers, TWI, and USART before AVR power-down sleep
+- Status LED is mapped on D8 but disabled in firmware by default to avoid wasting battery
 
 Octopus_Board Nano
 - D3  -> PWM output for all 6 lamps through transistor / MOSFET driver
@@ -67,4 +69,5 @@ Power notes for Remote_Control
   - remove or avoid power LED if your Nano clone has one
   - use a low-quiescent-current 3.3V regulator for the NRF24
   - cheap Nano regulators often waste a lot of power
+- The firmware now follows the old transmitter's aggressive sleep timing while keeping the new watchdog and fixed-packet recovery design
 - Deep sleep helps, but board hardware choice still matters a lot

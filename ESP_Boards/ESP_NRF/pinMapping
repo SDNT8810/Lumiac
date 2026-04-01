@@ -1,0 +1,48 @@
+ESP_NRF Pin Mapping
+
+Board role
+- `ESP_NRF` is the Octopus-side ESP32 firmware for use with:
+  - `Arduino_Nano_NRF24/Remote_Control` over NRF24
+  - phone / PC browser over Wi-Fi hotspot
+
+Wi-Fi / network
+- AP SSID: `ESP_NRF`
+- AP password: `octopus123`
+- AP IP: `192.168.4.1`
+- Browser UI:
+  - `http://192.168.4.1`
+  - websocket on port `81`
+
+ESP32 to Octopus board
+- `GPIO17` -> Octopus RX
+- `GPIO16` -> Octopus TX
+- `GPIO23` -> Octopus RESET
+- common GND required
+
+Lamp PWM
+- `GPIO18` -> single PWM output for all 6 lamps through transistor / MOSFET driver
+- output is active-high in firmware
+
+ESP32 to NRF24
+- `GPIO33` -> NRF24 CE
+- `GPIO25` -> NRF24 CSN
+- `GPIO14` -> NRF24 SCK
+- `GPIO19` -> NRF24 MISO
+- `GPIO13` -> NRF24 MOSI
+- `3.3V` -> NRF24 VCC
+- `GND` -> NRF24 GND
+
+NRF24 notes
+- NRF24 must be powered from `3.3V`, not `5V`
+- place a `10uF` to `47uF` capacitor near the NRF24 module
+- this firmware listens for the same packet protocol used by:
+  - `Arduino_Nano_NRF24/Remote_Control`
+
+Behavior notes
+- browser control and NRF remote can both control lights and positions
+- remote online/offline is based on recent NRF24 packet activity
+- dimmer hold from the NRF remote uses keepalive packets and auto-recovers on timeout
+- if Octopus serial stops responding, recovery is staged:
+  - retry `M115`
+  - UART reinit
+  - RESET pulse on `GPIO23`

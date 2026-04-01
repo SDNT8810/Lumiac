@@ -10,8 +10,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 BUILD_ENV = "STM32F446ZE_btt"
 PROJECT_DIR_CANDIDATES = (
+    ROOT / "Marlin" / "marlin-2.1.2.6",
     ROOT / "marlin-2.1.2.6",
+    ROOT / "Marlin" / "Marlin-2.1.2.6",
+    ROOT / "Marlin" / "MarlinConfigurations-2.1.2.6" / "marlin-2.1.2.6",
     ROOT / "simulator" / "marlin-2.1.2.6",
+    ROOT / "Simulator" / "marlin-2.1.2.6",
 )
 SD_ROOT = Path(os.environ.get("OCTOPUS_SD_ROOT", r"E:\\"))
 
@@ -20,6 +24,11 @@ def resolve_project_dir() -> Path:
     for candidate in PROJECT_DIR_CANDIDATES:
         if (candidate / "platformio.ini").exists():
             return candidate
+
+    marlin_dir = ROOT / "Marlin"
+    if marlin_dir.exists():
+        for candidate in marlin_dir.rglob("platformio.ini"):
+            return candidate.parent
 
     checked = "\n".join(f"- {path}" for path in PROJECT_DIR_CANDIDATES)
     raise FileNotFoundError(

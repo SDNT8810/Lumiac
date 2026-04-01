@@ -19,6 +19,7 @@ using namespace NrfOctopus;
 constexpr uint8_t kRadioCePin = 9;
 constexpr uint8_t kRadioCsnPin = 10;
 constexpr uint8_t kStatusLedPin = 8;
+constexpr bool kUseStatusLed = false;
 
 constexpr uint8_t kLightOnPin = A0;
 constexpr uint8_t kLightOffPin = A1;
@@ -29,7 +30,7 @@ constexpr uint8_t kDimmerPin = A5;
 constexpr uint8_t kSparePin = 2;
 
 constexpr uint32_t kDebounceMs = 30;
-constexpr uint32_t kStayAwakeAfterActivityMs = 15000;
+constexpr uint32_t kStayAwakeAfterActivityMs = 5000;
 constexpr uint32_t kDimmerKeepAliveMs = 250;
 constexpr uint32_t kTxRetryMs = 300;
 constexpr uint32_t kTxTimeoutMs = 5000;
@@ -118,6 +119,9 @@ void noteUserActivity() {
 }
 
 void pulseStatusLed(const uint8_t count, const uint16_t onMs, const uint16_t offMs) {
+  if (!kUseStatusLed)
+    return;
+
   for (uint8_t i = 0; i < count; ++i) {
     digitalWrite(kStatusLedPin, HIGH);
     delay(onMs);
@@ -149,6 +153,25 @@ bool initializeRadio() {
   radio.powerUp();
   delay(5);
   return true;
+}
+
+void prepareForDeepSleep() {
+  radio.powerDown();
+  radioReady = false;
+
+  ADCSRA &= ~_BV(ADEN);
+  power_adc_disable();
+  power_spi_disable();
+  power_timer0_disable();
+  power_timer1_disable();
+  power_timer2_disable();
+  power_twi_disable();
+  power_usart0_disable();
+}
+
+void restoreAfterDeepSleep() {
+  power_all_enable();
+  ADCSRA |= _BV(ADEN);
 }
 
 bool ensureRadioReady() {
@@ -380,8 +403,7 @@ void enterDeepSleepIfIdle() {
       return;
   }
 
-  radio.powerDown();
-  ADCSRA &= ~_BV(ADEN);
+  prepareForDeepSleep();
   wdt_disable();
 
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
@@ -394,7 +416,7 @@ void enterDeepSleepIfIdle() {
   sleep_cpu();
 
   sleep_disable();
-  ADCSRA |= _BV(ADEN);
+  restoreAfterDeepSleep();
   wdt_enable(WDTO_8S);
   noteUserActivity();
   initializeRadio();
@@ -433,7 +455,6 @@ ISR(PCINT2_vect) {
 void setup() {
   MCUSR = 0;
   wdt_disable();
-  Serial.begin(115200);
 
   initStatusLed();
   initButtonState();

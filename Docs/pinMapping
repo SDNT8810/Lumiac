@@ -26,11 +26,74 @@ ESP_Remote
   - GPIO32 -> Dimmer / hold-to-change-brightness
   - GPIO33 -> Spare / reserved
 
+ESP_NRF
+- Board role: Wi-Fi access point, web portal, Octopus serial bridge, light PWM controller, NRF24 receiver
+- Wi-Fi AP SSID: ESP_NRF
+- Wi-Fi AP password: octopus123
+- Fixed IP: 192.168.4.1
+- UART to Octopus board:
+  - GPIO16 -> RX from Octopus TX
+  - GPIO17 -> TX to Octopus RX
+- Octopus hardware reset line:
+  - GPIO23 -> Octopus RESET pin
+  - Drive style: open-drain, active-low pulse
+  - Wiring rule: common GND required
+- Light PWM output:
+  - GPIO18 -> PWM output for all 6 lamps through transistor/MOSFET driver
+- NRF24 wiring:
+  - GPIO33 -> CE
+  - GPIO25 -> CSN
+  - GPIO14 -> SCK
+  - GPIO19 -> MISO
+  - GPIO13 -> MOSI
+  - 3.3V -> NRF24 VCC
+  - GND -> NRF24 GND
+
+Arduino_Nano_NRF24 Remote_Control
+- Board role: battery-powered Nano remote with deep sleep and NRF24
+- NRF24 SPI wiring:
+  - D9 -> CE
+  - D10 -> CSN
+  - D11 -> MOSI
+  - D12 -> MISO
+  - D13 -> SCK
+- Buttons use INPUT_PULLUP and are active-low:
+  - A0 -> Lights On
+  - A1 -> Lights Off
+  - A2 -> Pos1
+  - A3 -> Pos2
+  - A4 -> Random Position
+  - A5 -> Dimmer / hold-to-change-brightness
+  - D2 -> Spare / reserved
+- Status LED:
+  - D8 -> status LED output
+  - disabled in firmware by default to reduce battery drain
+
+Arduino_Nano_NRF24 Octopus_Board
+- Board role: always-on Nano receiver with NRF24, lamp PWM, and Octopus serial/reset control
+- NRF24 SPI wiring:
+  - D9 -> CE
+  - D10 -> CSN
+  - D11 -> MOSI
+  - D12 -> MISO
+  - D13 -> SCK
+- Lamp PWM output:
+  - D3 -> PWM output for all 6 lamps through transistor/MOSFET driver
+- Octopus control:
+  - D0/RX <- Octopus TX
+  - D1/TX -> Octopus RX
+  - D4 -> Octopus RESET pin
+  - D5 -> status LED
+
 Notes
 - Do not drive the lamps directly from GPIO18. Use a proper transistor or MOSFET stage sized for the lamp current.
 - The Octopus reset wire should only pull RESET low. Do not drive reset high from the ESP. The firmware uses open-drain output for this.
+- For the Nano receiver, D4 must only pull RESET low. The firmware releases RESET by switching the pin to input mode.
 - The dimmer button changes brightness in steps while held. On release, direction flips for the next hold.
 - Browser control is hosted by ESP_Octopus at http://192.168.4.1/
+- Browser control is hosted by ESP_NRF at http://192.168.4.1/ when that firmware is used instead.
 - ESP_Remote firmware now enters GPIO-wake light sleep after idle time, powers Wi-Fi down while sleeping, and reconnects when a button wakes it.
 - If a button wake happens while Wi-Fi is still reconnecting, the button action is queued and sent as soon as the link comes back.
 - For reliable ESP32 operation from 3x AAA cells, use a stable regulator and add local bulk capacitance near the ESP board. Wi-Fi current bursts are much higher than the average current.
+- NRF24 modules must be powered from 3.3V and should have a local 10uF to 47uF capacitor near the radio.
+- The Nano remote now uses aggressive 5-second idle timeout before deep sleep while keeping watchdog and fixed-packet recovery behavior.
