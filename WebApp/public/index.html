@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#bfb7aa" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="WebApp" />
+    <title>WebApp</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icons/webapp-icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <section class="panel">
+        <div class="card command-card">
+          <div class="card-head">
+            <div class="status-strip" aria-label="System status">
+              <div class="status-pill">
+                <span class="status-dot"></span>
+                <span class="status-pill-label">WiFi</span>
+                <span id="wifiStatus">On</span>
+              </div>
+              <div class="status-pill">
+                <span class="status-dot"></span>
+                <span class="status-pill-label">Octopus</span>
+                <span id="octopusStatus">Sim</span>
+              </div>
+              <div class="status-pill">
+                <span class="status-dot"></span>
+                <span class="status-pill-label">Remote</span>
+                <span id="remoteStatus">Ready</span>
+              </div>
+            </div>
+          </div>
+          <p id="statusLine" hidden>Idle</p>
+          <div class="command-grid">
+            <div class="command-block">
+              <div class="button-row">
+                <button id="pos1Button" class="ghost-button" type="button">POS 1</button>
+                <button id="pos2Button" class="ghost-button" type="button">POS 2</button>
+                <button id="pos3Button" class="ghost-button" type="button">POS 3</button>
+                <button id="randomButton" type="button">Random</button>
+              </div>
+            </div>
+
+            <div class="command-block">
+              <div class="card-subhead">
+                <h3>Speed</h3>
+                <span id="feedReadout">10</span>
+              </div>
+              <div class="feed-row">
+                <input id="feedSlider" type="range" min="0" max="100" step="1" value="10" />
+              </div>
+            </div>
+
+            <div class="command-block">
+              <div class="card-subhead">
+                <h3>Lamp</h3>
+                <span id="lampReadout">OFF 63</span>
+              </div>
+              <div class="lamp-row">
+                <label class="switch">
+                  <input id="lampSwitch" type="checkbox" />
+                  <span class="switch-track"></span>
+                </label>
+                <input id="lampBrightnessSlider" type="range" min="0" max="100" step="1" value="63" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card radial-card">
+          <div class="card-head">
+            <h2>Legs</h2>
+          </div>
+          <div class="leg-ring-wrap">
+            <div id="legControls" class="leg-ring">
+              <button id="homeButton" class="home-button" type="button">Home</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card terminal-card">
+          <div class="terminal-grid">
+            <section class="terminal-block">
+              <div class="card-head">
+                <h2>Terminal</h2>
+                <button id="sendCommandButton" type="button">Send</button>
+              </div>
+              <input id="programFileInput" type="file" accept=".txt,.nc,.gcode,.tap" hidden />
+              <p id="sourceNote" class="source-note">File: none</p>
+              <textarea id="gcodeInput" spellcheck="false" placeholder="Paste G-code or choose a file."></textarea>
+              <div class="hint-list">
+                <p><code>G0</code> <code>G1</code> <code>G4 P...</code> <code>@LOOP</code> | Axes: <code>X Y Z A B C</code></p>
+              </div>
+            </section>
+
+            <section class="terminal-block">
+              <div class="card-head">
+                <h2>Log</h2>
+                <button id="clearLogButton" class="ghost-button" type="button">Clear Log</button>
+              </div>
+              <div id="terminalLog" class="terminal-log" aria-live="polite"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

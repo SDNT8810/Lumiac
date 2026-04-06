@@ -10,7 +10,7 @@ What it keeps from `ESP_Octopus`
 - Wi-Fi access point and browser control page
 - live logs in the web portal
 - Octopus UART communication
-- PWM lamp control
+- lamp control delegated to Marlin with `M355`
 - M215 random-code discovery
 - staged Octopus recovery with UART reinit and reset-line pulse
 

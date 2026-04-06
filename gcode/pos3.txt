@@ -1,0 +1,7 @@
+; Preset 3: alternating tripod stance
+; Alternate the legs between low and high extension.
+G90
+G91
+G1 X-10 Y-10 Z-10 A-10 B-10 C-10 F200
+G90
+G1 X30 Y80 Z30 A80 B30 C80 F200

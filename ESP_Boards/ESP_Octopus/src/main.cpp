@@ -27,14 +27,7 @@ constexpr int kOctopusResetPin = 23;
 constexpr bool kOctopusResetActiveLow = true;
 constexpr uint32_t kOctopusResetPulseMs = 250;
 
-// Drive the six lamps through a transistor / MOSFET. Do not power them directly from the ESP32 pin.
-constexpr int kLampPwmPin = 18;
-constexpr int kLampPwmChannel = 0;
-constexpr uint32_t kLampPwmFrequency = 5000;
-constexpr uint8_t kLampPwmResolution = 8;
-constexpr bool kLampPwmActiveHigh = true;
-
-constexpr uint32_t kStatePollMs = 500;
+constexpr uint32_t kStatePollMs = 1500;
 constexpr uint32_t kRandomCodePollMs = 15000;
 constexpr uint32_t kRemoteOfflineMs = 20000;
 constexpr uint32_t kOctopusOfflineMs = 5000;
@@ -48,6 +41,7 @@ constexpr uint8_t kLowHeapStrikeLimit = 3;
 constexpr size_t kSerialLineMax = 256;
 constexpr size_t kMaxRandomCodes = 16;
 constexpr size_t kLogHistorySize = 120;
+constexpr size_t kLogReplayLimit = 30;
 
 constexpr char kAxes[] = { 'X', 'Y', 'Z', 'A', 'B', 'C' };
 constexpr size_t kAxisCount = sizeof(kAxes) / sizeof(kAxes[0]);
@@ -89,6 +83,8 @@ String logHistory[kLogHistorySize];
 size_t logHistoryStart = 0;
 size_t logHistoryCount = 0;
 
+void sendToOctopus(const String& line, const String& source = kBoardName, const bool logTx = true);
+
 void initStringStorage() {
   serialLine.reserve(kSerialLineMax);
   remoteIpString.reserve(16);
@@ -127,6 +123,10 @@ void appendLogHistory(const String& line) {
   logHistoryStart = (logHistoryStart + 1) % kLogHistorySize;
 }
 
+bool isTelemetryOnlyLine(const String& line) {
+  return line == "ok" || line.startsWith("X:");
+}
+
 void sendJsonToClient(const uint8_t clientNum, const JsonDocument& doc) {
   String payload;
   serializeJson(doc, payload);
@@ -160,10 +160,18 @@ void broadcastStatus(const String& message) {
   broadcastJson(doc);
 }
 
-void applyLampOutput() {
-  const uint8_t requestedDuty = lightState.on ? lightState.brightness : 0;
-  const uint8_t duty = kLampPwmActiveHigh ? requestedDuty : static_cast<uint8_t>(255 - requestedDuty);
-  ledcWrite(kLampPwmChannel, duty);
+String lampStateCommand(const bool on, const uint8_t brightness) {
+  if (!(on && brightness > 0))
+    return "M355 S0";
+
+  String gcode = "M355 P";
+  gcode += String(brightness);
+  gcode += " S1";
+  return gcode;
+}
+
+void queryLampState(const String& source, const bool logTx = false) {
+  sendToOctopus("M355", source, logTx);
 }
 
 void fillStateDocument(JsonDocument& doc) {
@@ -186,7 +194,8 @@ void fillStateDocument(JsonDocument& doc) {
   lights["on"] = lightState.on;
   lights["brightness"] = lightState.brightness;
   lights["lastNonZeroBrightness"] = lightState.lastNonZeroBrightness;
-  lights["pwmPin"] = kLampPwmPin;
+  lights["driver"] = "octopus_m355";
+  lights["output"] = "configured_bed_or_heater";
 
   JsonArray codes = doc["randomCodes"].to<JsonArray>();
   for (size_t i = 0; i < randomCodeCount; ++i)
@@ -211,8 +220,11 @@ void markRemoteSeen(const IPAddress& remoteIp, const char* reason) {
 }
 
 void sendLogHistoryToClient(const uint8_t clientNum) {
-  for (size_t i = 0; i < logHistoryCount; ++i) {
-    const size_t index = (logHistoryStart + i) % kLogHistorySize;
+  const size_t replayCount = min(logHistoryCount, kLogReplayLimit);
+  const size_t replayStart = (logHistoryStart + logHistoryCount + kLogHistorySize - replayCount) % kLogHistorySize;
+
+  for (size_t i = 0; i < replayCount; ++i) {
+    const size_t index = (replayStart + i) % kLogHistorySize;
     JsonDocument doc;
     doc["type"] = "log";
     doc["line"] = logHistory[index];
@@ -229,7 +241,7 @@ void sendStateResponse() {
   server.send(200, "application/json", payload);
 }
 
-void sendToOctopus(const String& line, const String& source = kBoardName, const bool logTx = true) {
+void sendToOctopus(const String& line, const String& source, const bool logTx) {
   if (line.isEmpty()) return;
 
   if (logTx)
@@ -238,7 +250,16 @@ void sendToOctopus(const String& line, const String& source = kBoardName, const 
   octopusSerial.print('\n');
 }
 
-void setLightState(const bool on, const uint8_t brightness, const String& source, const String& reason) {
+void setFeedRate(const int feed, const String& source, const String& reason) {
+  const int nextFeedRate = constrain(feed, 10, 2000);
+  if (nextFeedRate == currentFeedRate) return;
+
+  currentFeedRate = nextFeedRate;
+  logMessage(source, reason + " -> F" + String(currentFeedRate));
+  broadcastState();
+}
+
+void setLightState(const bool on, const uint8_t brightness, const String& source, const String& reason, const bool syncToOctopus = true) {
   const bool nextOn = on && brightness > 0;
   const bool changed = nextOn != lightState.on || brightness != lightState.brightness;
 
@@ -247,7 +268,8 @@ void setLightState(const bool on, const uint8_t brightness, const String& source
   if (brightness > 0)
     lightState.lastNonZeroBrightness = brightness;
 
-  applyLampOutput();
+  if (syncToOctopus)
+    sendToOctopus(lampStateCommand(nextOn, brightness), source);
 
   if (changed) {
     logMessage(source, reason + " -> lights " + (lightState.on ? String("ON") : String("OFF")) + ", brightness=" + String(lightState.brightness));
@@ -269,6 +291,28 @@ void turnLightsOff(const String& source, const String& reason) {
 void setBrightness(const int brightness, const String& source, const String& reason) {
   const uint8_t nextBrightness = clampBrightness(brightness);
   setLightState(nextBrightness > 0, nextBrightness, source, reason);
+}
+
+void parseLampStateLine(const String& line) {
+  if (!line.startsWith("Case light:")) return;
+
+  String value = line.substring(11);
+  value.trim();
+
+  if (value.equalsIgnoreCase("off")) {
+    setLightState(false, lightState.brightness, "Octopus", "Lamp state report", false);
+    return;
+  }
+
+  if (value.equalsIgnoreCase("on")) {
+    const uint8_t restored = lightState.lastNonZeroBrightness > 0 ? lightState.lastNonZeroBrightness : 160;
+    setLightState(true, restored, "Octopus", "Lamp state report", false);
+    return;
+  }
+
+  const int reportedBrightness = value.toInt();
+  if (reportedBrightness < 0 || reportedBrightness > 255) return;
+  setLightState(true, static_cast<uint8_t>(reportedBrightness), "Octopus", "Lamp state report", false);
 }
 
 void resetRandomCodes() {
@@ -369,13 +413,17 @@ void handleOctopusLine(const String& rawLine) {
   line.trim();
   if (!line.length()) return;
 
-  logMessage("Octopus", line);
+  if (!isTelemetryOnlyLine(line))
+    logMessage("Octopus", line);
   lastOctopusRxMs = millis();
+  parseLampStateLine(line);
   parsePositionLine(line);
   parseRandomCodeLine(line);
 
-  if (line.startsWith("FIRMWARE_NAME:"))
+  if (line.startsWith("FIRMWARE_NAME:")) {
     octopusOnline = true;
+    queryLampState(kBoardName);
+  }
 }
 
 void pollOctopusState() {
@@ -525,6 +573,11 @@ bool handleAction(const String& action, JsonVariantConst payload, const String& 
 
   if (action == "set_brightness") {
     setBrightness(payload["brightness"] | lightState.brightness, source, "Brightness update");
+    return true;
+  }
+
+  if (action == "set_feed") {
+    setFeedRate(payload["feed"] | currentFeedRate, source, "Feed rate update");
     return true;
   }
 
@@ -688,10 +741,6 @@ void setup() {
   pinMode(kOctopusResetPin, OUTPUT_OPEN_DRAIN);
   digitalWrite(kOctopusResetPin, kOctopusResetActiveLow ? HIGH : LOW);
 
-  ledcSetup(kLampPwmChannel, kLampPwmFrequency, kLampPwmResolution);
-  ledcAttachPin(kLampPwmPin, kLampPwmChannel);
-  applyLampOutput();
-
   octopusSerial.begin(kOctopusBaud, SERIAL_8N1, kOctopusRxPin, kOctopusTxPin);
 
   WiFi.setHostname(kBoardName);
@@ -704,11 +753,12 @@ void setup() {
   setupWebSocket();
 
   logMessage(kBoardName, String("Access point ready at http://") + WiFi.softAPIP().toString());
-  logMessage(kBoardName, String("PWM output ready on GPIO ") + kLampPwmPin);
+  logMessage(kBoardName, "Lamp output delegated to Octopus M355 on the configured bed/heater output.");
   logMessage(kBoardName, String("Octopus reset line ready on GPIO ") + kOctopusResetPin);
 
   delay(300);
   sendToOctopus("M115");
+  queryLampState(kBoardName);
   sendToOctopus("M114");
   queryRandomCodes(kBoardName);
   broadcastState();

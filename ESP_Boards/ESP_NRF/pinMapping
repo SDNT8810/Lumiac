@@ -19,8 +19,10 @@ ESP32 to Octopus board
 - `GPIO23` -> Octopus RESET
 - common GND required
 
-Lamp PWM
-- `GPIO18` -> single PWM output for all 6 lamps through transistor / MOSFET driver
+Lamp control
+- no local lamp PWM output on the ESP32
+- firmware sends `M355` to Marlin
+- Marlin drives the configured Octopus bed/heater output
 - output is active-high in firmware
 
 ESP32 to NRF24

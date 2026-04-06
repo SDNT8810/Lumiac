@@ -40,10 +40,11 @@ Remote low-power behavior
 - Status LED is mapped on D8 but disabled in firmware by default to avoid wasting battery
 
 Octopus_Board Nano
-- D3  -> PWM output for all 6 lamps through transistor / MOSFET driver
 - D4  -> Octopus RESET line
 - D5  -> status LED output
 - D0/RX and D1/TX -> Octopus board serial link at 115200 baud
+- Lamp control is sent to Marlin with `M355`
+- Marlin drives the configured Octopus bed/heater output for the lamps
 
 Octopus RESET wiring
 - D4 must only pull the Octopus RESET line low

@@ -15,7 +15,6 @@ using namespace NrfOctopus;
 
 constexpr uint8_t kRadioCePin = 9;
 constexpr uint8_t kRadioCsnPin = 10;
-constexpr uint8_t kLampPwmPin = 3;
 constexpr uint8_t kOctopusResetPin = 4;
 constexpr uint8_t kStatusLedPin = 5;
 
@@ -68,6 +67,9 @@ uint32_t lastRadioInitMs = 0;
 
 char serialLine[kSerialLineMax + 1] = {};
 uint8_t serialLineLength = 0;
+
+void sendToOctopus(const __FlashStringHelper* line);
+void sendToOctopus(const char* line);
 
 inline void feedWatchdog() {
   wdt_reset();
@@ -140,17 +142,28 @@ void pulseOctopusResetLine() {
   releaseOctopusResetLine();
 }
 
-void applyLampOutput() {
-  const uint8_t duty = lightsOn ? brightness : 0;
-  analogWrite(kLampPwmPin, duty);
+void sendLampStateToOctopus() {
+  char command[20];
+  if (!lightsOn || brightness == 0) {
+    strcpy(command, "M355 S0");
+  }
+  else {
+    snprintf(command, sizeof(command), "M355 P%u S1", brightness);
+  }
+  sendToOctopus(command);
 }
 
-void setLightState(const bool on, const uint8_t nextBrightness) {
+void queryLampState() {
+  sendToOctopus(F("M355"));
+}
+
+void setLightState(const bool on, const uint8_t nextBrightness, const bool syncToOctopus = true) {
   brightness = nextBrightness;
   lightsOn = on && nextBrightness > 0;
   if (nextBrightness > 0)
     lastNonZeroBrightness = nextBrightness;
-  applyLampOutput();
+  if (syncToOctopus)
+    sendLampStateToOctopus();
 }
 
 void turnLightsOn() {
@@ -230,6 +243,31 @@ void parseRandomCodeLine(const char* line) {
     waitingForRandomCodeList = false;
 }
 
+void parseLampStateLine(const char* line) {
+  if (strncmp(line, "Case light:", 11) != 0)
+    return;
+
+  const char* value = line + 11;
+  while (*value == ' ') ++value;
+
+  if (strcmp(value, "off") == 0 || strcmp(value, "OFF") == 0) {
+    setLightState(false, brightness, false);
+    return;
+  }
+
+  if (strcmp(value, "on") == 0 || strcmp(value, "ON") == 0) {
+    const uint8_t restored = lastNonZeroBrightness > 0 ? lastNonZeroBrightness : 160;
+    setLightState(true, restored, false);
+    return;
+  }
+
+  const int reportedBrightness = atoi(value);
+  if (reportedBrightness < 0 || reportedBrightness > 255)
+    return;
+
+  setLightState(true, static_cast<uint8_t>(reportedBrightness), false);
+}
+
 void handleOctopusLine(const char* line) {
   if (!line[0])
     return;
@@ -237,8 +275,12 @@ void handleOctopusLine(const char* line) {
   lastOctopusRxMs = millis();
   octopusOnline = true;
 
-  if (strncmp(line, "FIRMWARE_NAME:", 14) == 0)
+  parseLampStateLine(line);
+
+  if (strncmp(line, "FIRMWARE_NAME:", 14) == 0) {
     octopusOnline = true;
+    queryLampState();
+  }
 
   parseRandomCodeLine(line);
 }
@@ -406,11 +448,9 @@ void updateOnlineState() {
 }
 
 void initPins() {
-  pinMode(kLampPwmPin, OUTPUT);
   pinMode(kStatusLedPin, OUTPUT);
   digitalWrite(kStatusLedPin, LOW);
   releaseOctopusResetLine();
-  applyLampOutput();
 }
 
 } // namespace
@@ -433,6 +473,7 @@ void setup() {
   lastOctopusRxMs = millis();
   queryRandomCodes();
   sendToOctopus(F("M115"));
+  queryLampState();
 
   wdt_enable(WDTO_8S);
 }

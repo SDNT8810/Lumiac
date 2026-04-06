@@ -16,6 +16,8 @@ PROJECT_DIR_CANDIDATES = (
     ROOT / "Marlin" / "MarlinConfigurations-2.1.2.6" / "marlin-2.1.2.6",
     ROOT / "simulator" / "marlin-2.1.2.6",
     ROOT / "Simulator" / "marlin-2.1.2.6",
+    ROOT / "webapp" / "marlin-2.1.2.6",
+    ROOT / "WebApp" / "marlin-2.1.2.6",
 )
 SD_ROOT = Path(os.environ.get("OCTOPUS_SD_ROOT", r"E:\\"))
 
@@ -49,6 +51,9 @@ def run_build() -> None:
 
 
 def remove_old_cur() -> None:
+    if not SD_ROOT.exists():
+        print(f"SD card path not found, skipping cleanup/copy: {SD_ROOT}")
+        return
     if FIRMWARE_CUR.exists():
         FIRMWARE_CUR.unlink()
         print(f"Removed {FIRMWARE_CUR}")
@@ -58,7 +63,8 @@ def remove_old_cur() -> None:
 
 def copy_firmware() -> None:
     if not SD_ROOT.exists():
-        raise FileNotFoundError(f"SD card path not found: {SD_ROOT}")
+        print(f"SD card path not found, skipping firmware copy: {SD_ROOT}")
+        return
     if not FIRMWARE_SRC.exists():
         raise FileNotFoundError(f"Built firmware not found: {FIRMWARE_SRC}")
 

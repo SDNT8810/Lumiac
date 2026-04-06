@@ -1,0 +1,9 @@
+{
+  "name": "octopus-webapp",
+  "version": "1.0.0",
+  "description": "Installable local WebApp for Octopus leg control, presets, and terminal commands.",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  }
+}
