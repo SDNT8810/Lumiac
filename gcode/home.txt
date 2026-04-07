@@ -1,3 +1,0 @@
-; Home all six axes
-G90
-G28 X Y Z A B C

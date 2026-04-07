@@ -18,7 +18,7 @@ This repository contains firmware, motion files, and support material for an Oct
   - [`marlin-2.1.2.6`](Marlin/marlin-2.1.2.6): main Marlin firmware project for the Octopus controller board.
   - `MarlinConfigurations-2.1.2.6`: reference configuration bundle.
 
-- [`gcode`](gcode)
+- [`gcodes`](gcodes)
   - SD card motion files used by `M215`, including `home`, `pos1`, `pos2`, `pos3`, and numbered random-position sequences.
 
 - [`Docs`](Docs)

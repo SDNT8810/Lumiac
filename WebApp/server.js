@@ -4,7 +4,7 @@ const path = require("path");
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, "public");
-const GCODE_DIR = path.join(__dirname, "..", "gcode");
+const GCODE_DIR = path.join(__dirname, "..", "gcodes");
 const CONFIG_ADV_PATH = path.join(__dirname, "..", "Marlin", "marlin-2.1.2.6", "Marlin", "Configuration_adv.h");
 
 const MIME_TYPES = {

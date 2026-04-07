@@ -611,7 +611,7 @@ async function parseProgram(programText) {
     if (command.type === "spider-file") {
       const spiderProgram = state.spiderPrograms[command.code];
       if (!spiderProgram?.exists || typeof spiderProgram.content !== "string") {
-        throw new Error(`Spider file S${command.code} not found in gcode directory.`);
+        throw new Error(`Spider file S${command.code} not found in gcodes directory.`);
       }
 
       const embedded = await parseProgram(spiderProgram.content);
@@ -788,7 +788,7 @@ async function runRandomSpiderFile() {
   await loadSpiderPrograms();
   const codes = getSpiderProgramCodes();
   if (!codes.length) {
-    setStatus("No spider files found in gcode directory.");
+    setStatus("No spider files found in gcodes directory.");
     return;
   }
 
@@ -838,7 +838,7 @@ setStatus("Idle", { log: false });
 appendLog("WebApp ready.");
 loadSpiderPrograms()
   .then(() => {
-    appendLog(`Loaded ${getSpiderProgramCodes().length} spider files from gcode directory.`);
+    appendLog(`Loaded ${getSpiderProgramCodes().length} spider files from gcodes directory.`);
   })
   .catch((error) => {
     appendLog(`Could not load spider files: ${error.message}`);
