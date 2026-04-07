@@ -131,7 +131,11 @@ int8_t dimmerDirection = 1;
 bool startupHomePending = true;
 bool startupHomeInProgress = false;
 bool startupAutoRunPending = true;
+bool startupAutoRunArmed = false;
 bool octopusResetVerifyPending = false;
+bool spiderPauseForAdjustment = false;
+bool manualSpiderPauseRequested = false;
+bool spiderLoopRestartPending = false;
 
 uint32_t lastStatePollMs = 0;
 uint32_t lastRandomCodeQueryMs = 0;
@@ -143,13 +147,15 @@ uint32_t lastRemoteActivityMs = 0;
 uint32_t lastHealthCheckMs = 0;
 uint32_t lastDimmerStepMs = 0;
 uint32_t startupHomeReadyMs = 0;
-uint32_t startupHomeStartedMs = 0;
+uint32_t startupAutoRunReadyMs = 0;
+uint32_t spiderLoopRestartReadyMs = 0;
 uint32_t octopusResetVerifyDeadlineMs = 0;
 uint8_t lowHeapStrikeCount = 0;
 uint8_t connectedStationCount = 0;
 
 String serialLine;
 String remoteIpString = "RF 8CH";
+String desiredSpiderLoopCommand;
 String logHistory[kLogHistorySize];
 size_t logHistoryStart = 0;
 size_t logHistoryCount = 0;
@@ -157,13 +163,17 @@ size_t logHistoryCount = 0;
 void sendToOctopus(const String& line, const String& source = kBoardName, const bool logTx = true);
 bool pauseSpiderProgramForAdjustment(const String& source, const String& reason);
 void resumeSpiderProgramAfterAdjustment(const String& source, const String& reason);
-bool allAxesNearHome();
-void maybeRunStartupLoopAfterHome();
 void cancelStartupAutomation(const String& source, const char* reason);
+void runStartupLoopIfReady();
+void clearDesiredSpiderLoop();
+void setDesiredSpiderLoop(const String& gcode);
+void scheduleSpiderLoopRestart(const String& source, const String& reason, const uint32_t delayMs = 150);
+void runSpiderLoopRestartIfReady();
 
 void initStringStorage() {
   serialLine.reserve(kSerialLineMax);
   remoteIpString.reserve(16);
+  desiredSpiderLoopCommand.reserve(16);
   for (size_t i = 0; i < kLogHistorySize; ++i)
     logHistory[i].reserve(128);
 }
@@ -201,14 +211,6 @@ bool isTelemetryOnlyLine(const String& line) {
 
 bool isBenignSpiderStatusLine(const String& line) {
   return line == "No active spider SD file to abort.";
-}
-
-bool allAxesNearHome() {
-  for (size_t i = 0; i < kAxisCount; ++i) {
-    const float value = axisPositions[i];
-    if (value < -0.5f || value > 0.5f) return false;
-  }
-  return true;
 }
 
 void sendJsonToClient(const uint8_t clientNum, const JsonDocument& doc) {
@@ -533,6 +535,7 @@ bool pauseSpiderProgramForAdjustment(const String& source, const String& reason)
   if (!(spiderProgramActive && !spiderProgramPaused)) return false;
 
   logMessage(source, reason + " -> pausing active spider program");
+  spiderPauseForAdjustment = true;
   sendToOctopus("M215 P", source, false);
   spiderProgramPaused = true;
   delay(kMotionStopRepeatDelayMs);
@@ -544,6 +547,7 @@ void resumeSpiderProgramAfterAdjustment(const String& source, const String& reas
 
   sendToOctopus("M215 R", source, false);
   spiderProgramPaused = false;
+  spiderPauseForAdjustment = false;
   logMessage(source, reason + " -> resuming spider program");
 }
 
@@ -554,12 +558,53 @@ void prepareMotionCommand(const String& source, const char* reason, const bool s
   syncMotionSpeedToOctopus(source, spiderJob);
 }
 
+void clearDesiredSpiderLoop() {
+  desiredSpiderLoopCommand = "";
+  manualSpiderPauseRequested = false;
+  spiderPauseForAdjustment = false;
+  spiderLoopRestartPending = false;
+  spiderLoopRestartReadyMs = 0;
+}
+
+void setDesiredSpiderLoop(const String& gcode) {
+  desiredSpiderLoopCommand = normalizedGcode(gcode);
+  manualSpiderPauseRequested = false;
+  spiderLoopRestartPending = false;
+  spiderLoopRestartReadyMs = 0;
+}
+
+void scheduleSpiderLoopRestart(const String& source, const String& reason, const uint32_t delayMs) {
+  if (!desiredSpiderLoopCommand.length()) return;
+  if (manualSpiderPauseRequested || spiderPauseForAdjustment) return;
+  if (spiderLoopRestartPending) return;
+
+  spiderLoopRestartPending = true;
+  spiderLoopRestartReadyMs = millis() + delayMs;
+  logMessage(source, String("Scheduling spider loop restart after ") + reason + ".");
+}
+
+void runSpiderLoopRestartIfReady() {
+  if (!spiderLoopRestartPending) return;
+  if (millis() < spiderLoopRestartReadyMs) return;
+  if (spiderProgramActive && !spiderProgramPaused) return;
+
+  spiderLoopRestartPending = false;
+  prepareMotionCommand(kBoardName, "spider loop restart", true);
+  sendToOctopus(desiredSpiderLoopCommand, kBoardName);
+  spiderProgramActive = true;
+  spiderProgramPaused = false;
+  broadcastStatus("Restarting spider loop.");
+}
+
 void cancelStartupAutomation(const String& source, const char* reason) {
-  if (!(startupHomePending || startupHomeInProgress || startupAutoRunPending)) return;
+  if (!(startupHomePending || startupHomeInProgress || startupAutoRunPending || startupAutoRunArmed)) return;
 
   startupHomePending = false;
   startupHomeInProgress = false;
   startupAutoRunPending = false;
+  startupAutoRunArmed = false;
+  startupAutoRunReadyMs = 0;
+  clearDesiredSpiderLoop();
   logMessage(source, String("Cancelling startup automation before ") + reason + ".");
 }
 
@@ -666,6 +711,7 @@ void runRandomPosition(const String& source) {
 
   const uint16_t code = randomCodes[random(static_cast<long>(randomCodeCount))];
   prepareMotionCommand(source, "random position", true);
+  setDesiredSpiderLoop("M215 S" + String(code));
   sendToOctopus("M215 S" + String(code), source);
   spiderProgramActive = true;
   spiderProgramPaused = false;
@@ -681,22 +727,21 @@ void runStartupHomeIfReady() {
 
   startupHomePending = false;
   startupHomeInProgress = true;
-  startupHomeStartedMs = now;
   broadcastStatus("Running startup home.");
   prepareMotionCommand(kBoardName, "startup home");
   sendToOctopus("M215 H", kBoardName);
 }
 
-void maybeRunStartupLoopAfterHome() {
-  if (!(startupHomeInProgress && startupAutoRunPending)) return;
+void runStartupLoopIfReady() {
+  if (!(startupAutoRunPending && startupAutoRunArmed)) return;
+  if (millis() < startupAutoRunReadyMs) return;
+  if (spiderProgramActive || spiderProgramPaused) return;
 
-  const uint32_t now = millis();
-  if (now - startupHomeStartedMs < kStartupAutoplayDelayMs) return;
-  if (!allAxesNearHome()) return;
-
-  startupHomeInProgress = false;
   startupAutoRunPending = false;
+  startupAutoRunArmed = false;
+  startupAutoRunReadyMs = 0;
   prepareMotionCommand(kBoardName, "startup S1", true);
+  setDesiredSpiderLoop("M215 S1");
   sendToOctopus("M215 S1", kBoardName);
   spiderProgramActive = true;
   spiderProgramPaused = false;
@@ -729,7 +774,6 @@ void parsePositionLine(const String& line) {
     octopusOnline = true;
     lastOctopusRxMs = millis();
     broadcastState();
-    maybeRunStartupLoopAfterHome();
   }
 }
 
@@ -778,11 +822,33 @@ void handleOctopusLine(const String& rawLine) {
     spiderProgramPaused = false;
   else if (line == "Paused spider SD file.")
     spiderProgramPaused = true;
-  else if (line.indexOf("busy: paused for user") >= 0)
+  else if (line.indexOf("busy: paused for user") >= 0) {
     spiderProgramPaused = true;
+    scheduleSpiderLoopRestart("Octopus", "unexpected pause");
+  }
   else if (line == "Aborted spider SD file." || line == "No active spider SD file to abort." || line == "Spider SD file finished.") {
     spiderProgramActive = false;
     spiderProgramPaused = false;
+    if (line == "Spider SD file finished.")
+      scheduleSpiderLoopRestart("Octopus", "completed cycle");
+  }
+
+  if (line == "Paused spider SD file." && !spiderPauseForAdjustment && !manualSpiderPauseRequested)
+    scheduleSpiderLoopRestart("Octopus", "unsolicited pause");
+
+  if (line.startsWith("Running spider ") || line == "Resumed spider SD file.") {
+    spiderLoopRestartPending = false;
+    spiderLoopRestartReadyMs = 0;
+    manualSpiderPauseRequested = false;
+    if (line == "Resumed spider SD file.")
+      spiderPauseForAdjustment = false;
+  }
+
+  if ((line == "Spider homing complete." || line == "Spider grouped homing complete.") && startupHomeInProgress && startupAutoRunPending) {
+    startupHomeInProgress = false;
+    startupAutoRunArmed = true;
+    startupAutoRunReadyMs = millis() + kStartupAutoplayDelayMs;
+    broadcastStatus("Startup home complete. Preparing S1.");
   }
 
   if (line.startsWith("FIRMWARE_NAME:")) {
@@ -790,6 +856,9 @@ void handleOctopusLine(const String& rawLine) {
     spiderProgramActive = false;
     spiderProgramPaused = false;
     startupHomeInProgress = false;
+    startupAutoRunArmed = false;
+    startupAutoRunReadyMs = 0;
+    spiderPauseForAdjustment = false;
     if (octopusResetVerifyPending) {
       octopusResetVerifyPending = false;
       logMessage(kBoardName, "Octopus reset confirmed by firmware restart banner.");
@@ -995,6 +1064,15 @@ void handleGcodeCommand(const String& gcode, const String& source) {
   if (source != kBoardName && motionCommand)
     cancelStartupAutomation(source, "manual command");
 
+  if (normalized == "M215 P")
+    manualSpiderPauseRequested = true;
+  else if (normalized == "M215 R")
+    manualSpiderPauseRequested = false;
+  else if (normalized.startsWith("M215 S"))
+    setDesiredSpiderLoop(normalized);
+  else if (motionCommand || normalized == "M215 P1" || normalized == "M215 P2" || normalized == "M215 P3")
+    clearDesiredSpiderLoop();
+
   if (gcodeIsImmediateStop(gcode)) {
     clearOctopusPausedState(source, "stop command");
     forceAbortSpiderProgram(source, "stop command");
@@ -1038,6 +1116,7 @@ bool handleAction(const String& action, JsonVariantConst payload, const String& 
   }
 
   if (action == "home") {
+    clearDesiredSpiderLoop();
     cancelStartupAutomation(source, "home");
     prepareMotionCommand(source, "home");
     sendToOctopus("M215 H", source);
@@ -1047,6 +1126,7 @@ bool handleAction(const String& action, JsonVariantConst payload, const String& 
   }
 
   if (action == "pos1") {
+    clearDesiredSpiderLoop();
     cancelStartupAutomation(source, "POS1");
     prepareMotionCommand(source, "POS1", true);
     sendToOctopus("M215 P1", source);
@@ -1056,6 +1136,7 @@ bool handleAction(const String& action, JsonVariantConst payload, const String& 
   }
 
   if (action == "pos2") {
+    clearDesiredSpiderLoop();
     cancelStartupAutomation(source, "POS2");
     prepareMotionCommand(source, "POS2", true);
     sendToOctopus("M215 P2", source);
@@ -1065,6 +1146,7 @@ bool handleAction(const String& action, JsonVariantConst payload, const String& 
   }
 
   if (action == "pos3") {
+    clearDesiredSpiderLoop();
     cancelStartupAutomation(source, "POS3");
     prepareMotionCommand(source, "POS3", true);
     sendToOctopus("M215 P3", source);
@@ -1080,6 +1162,7 @@ bool handleAction(const String& action, JsonVariantConst payload, const String& 
   }
 
   if (action == "stop_motion") {
+    clearDesiredSpiderLoop();
     cancelStartupAutomation(source, "stop");
     clearOctopusPausedState(source, "stop request");
     forceAbortSpiderProgram(source, "stop request");
@@ -1330,6 +1413,8 @@ void loop() {
   pollOctopusState();
   pollRandomCodes();
   runStartupHomeIfReady();
+  runStartupLoopIfReady();
+  runSpiderLoopRestartIfReady();
   recoverOctopusLink();
   healthCheck();
 
