@@ -1,160 +1,14 @@
 const MOTOR_COUNT = 6;
 const MIN_ANGLE = 0;
-const MAX_ANGLE = 120;
+const MAX_ANGLE = 119;
 const LEG_AXES = ["X", "Y", "Z", "A", "B", "C"];
 const DEFAULT_POSE = [20, 20, 20, 20, 20, 20];
 const SIM_FEED_REFERENCE = 200;
 const FEED_MIN = 10;
-const FEED_MAX = 300;
+const FEED_MAX = 400;
 const BRIGHTNESS_MAX = 255;
 const UI_SCALE_MAX = 100;
 const MAX_LOG_LINES = 300;
-const SPIDER_SD_CODE_PROGRAMS = {
-  1: `; Smooth struggling motion for the 6-leg spider
-G1 X18 Y26 Z22 A24 B20 C28 F200
-G1 X42 Y18 Z48 A20 B40 C24 F200
-G1 X76 Y28 Z62 A12 B68 C30 F200
-G1 X58 Y46 Z32 A26 B74 C54 F200
-G1 X24 Y72 Z18 A44 B38 C70 F200
-G1 X12 Y84 Z36 A62 B20 C82 F200
-G1 X34 Y58 Z64 A74 B14 C60 F200
-G1 X68 Y30 Z80 A54 B34 C28 F200
-G1 X88 Y18 Z58 A30 B64 C16 F200
-G1 X64 Y42 Z22 A16 B86 C34 F200
-G1 X30 Y78 Z14 A26 B66 C68 F200
-G1 X18 Y92 Z26 A48 B32 C88 F200
-G1 X44 Y62 Z58 A78 B20 C56 F200
-G1 X82 Y36 Z72 A60 B28 C24 F200
-G1 X70 Y18 Z38 A28 B72 C12 F200
-G1 X36 Y54 Z12 A18 B90 C30 F200
-G1 X20 Y74 Z34 A40 B58 C74 F200
-G1 X26 Y48 Z70 A72 B24 C52 F200
-G1 X54 Y28 Z86 A80 B16 C26 F200
-G1 X72 Y40 Z60 A52 B34 C18 F200
-G1 X50 Y66 Z24 A22 B80 C44 F200
-G1 X28 Y84 Z16 A34 B64 C82 F200
-G1 X46 Y60 Z44 A62 B30 C58 F200
-G1 X58 Y52 Z36 A54 B42 C50 F200
-G1 X38 Y44 Z40 A44 B40 C42 F200`,
-  2: `; Phased sinusoidal tapping cycle
-G1 X46 Y70 Z70 A46 B22 C22 F200
-G1 X60 Y74 Z60 A32 B18 C32 F200
-G1 X70 Y70 Z46 A22 B22 C46 F200
-G1 X74 Y60 Z32 A18 B32 C60 F200
-G1 X70 Y46 Z22 A22 B46 C70 F200
-G1 X60 Y32 Z18 A32 B60 C74 F200
-G1 X46 Y22 Z22 A46 B70 C70 F200
-G1 X32 Y18 Z32 A60 B74 C60 F200
-G1 X22 Y22 Z46 A70 B70 C46 F200
-G1 X18 Y32 Z60 A74 B60 C32 F200
-G1 X22 Y46 Z70 A70 B46 C22 F200
-G1 X32 Y60 Z74 A60 B32 C18 F200
-@LOOP`,
-  3: `; Tripod wave gait
-G1 X28 Y68 Z28 A68 B28 C68 F200
-G1 X36 Y78 Z36 A78 B36 C78 F200
-G1 X48 Y72 Z48 A72 B48 C72 F200
-G1 X62 Y58 Z62 A58 B62 C58 F200
-G1 X76 Y40 Z76 A40 B76 C40 F200
-G1 X62 Y24 Z62 A24 B62 C24 F200
-G1 X48 Y18 Z48 A18 B48 C18 F200
-G1 X36 Y26 Z36 A26 B36 C26 F200
-G1 X28 Y42 Z28 A42 B28 C42 F200
-G1 X36 Y58 Z36 A58 B36 C58 F200
-G1 X48 Y72 Z48 A72 B48 C72 F200
-G1 X62 Y78 Z62 A78 B62 C78 F200
-G1 X76 Y68 Z76 A68 B76 C68 F200
-G1 X62 Y52 Z62 A52 B62 C52 F200
-G1 X48 Y34 Z48 A34 B48 C34 F200
-G1 X36 Y22 Z36 A22 B36 C22 F200
-@LOOP`,
-  4: `; Ripple walk
-G1 X26 Y38 Z56 A76 B64 C44 F200
-G1 X34 Y30 Z46 A68 B72 C56 F200
-G1 X48 Y26 Z34 A56 B76 C68 F200
-G1 X64 Y30 Z26 A42 B72 C76 F200
-G1 X76 Y42 Z24 A30 B62 C72 F200
-G1 X80 Y58 Z28 A24 B48 C62 F200
-G1 X72 Y72 Z38 A26 B34 C48 F200
-G1 X58 Y80 Z54 A34 B26 C34 F200
-G1 X42 Y76 Z70 A46 B24 C26 F200
-G1 X30 Y64 Z78 A62 B28 C24 F200
-G1 X24 Y48 Z80 A74 B38 C28 F200
-G1 X26 Y34 Z72 A80 B54 C36 F200
-G1 X34 Y26 Z58 A76 B70 C48 F200
-G1 X46 Y24 Z42 A66 B78 C62 F200
-G1 X60 Y28 Z30 A52 B76 C74 F200
-G1 X72 Y38 Z24 A38 B68 C78 F200
-@LOOP`,
-  5: `; Alert pulse
-G1 X24 Y26 Z28 A24 B26 C28 F200
-G1 X40 Y42 Z44 A40 B42 C44 F200
-G1 X62 Y64 Z66 A62 B64 C66 F200
-G1 X84 Y86 Z88 A84 B86 C88 F200
-G1 X72 Y78 Z68 A58 B48 C42 F200
-G1 X54 Y70 Z76 A72 B64 C46 F200
-G1 X38 Y58 Z72 A84 B80 C58 F200
-G1 X26 Y40 Z58 A76 B88 C72 F200
-G1 X22 Y28 Z40 A60 B78 C84 F200
-G1 X30 Y24 Z28 A42 B60 C76 F200
-G1 X44 Y30 Z24 A30 B42 C58 F200
-G1 X62 Y42 Z30 A24 B28 C40 F200
-G1 X78 Y58 Z42 A28 B24 C28 F200
-G1 X88 Y74 Z58 A40 B30 C24 F200
-G1 X74 Y86 Z74 A58 B42 C30 F200
-G1 X52 Y76 Z86 A74 B58 C42 F200
-G1 X34 Y58 Z78 A86 B74 C58 F200
-G1 X24 Y38 Z56 A78 B86 C74 F200
-G1 X22 Y26 Z36 A60 B74 C86 F200
-G1 X24 Y24 Z28 A42 B52 C72 F200
-@LOOP`,
-  6: `; Clock sweep
-G1 X82 Y66 Z50 A34 B18 C34 F200
-G1 X88 Y74 Z58 A38 B16 C26 F200
-G1 X82 Y82 Z68 A46 B18 C20 F200
-G1 X72 Y88 Z78 A58 B24 C18 F200
-G1 X58 Y82 Z86 A72 B34 C20 F200
-G1 X42 Y72 Z88 A82 B48 C26 F200
-G1 X28 Y58 Z82 A88 B64 C36 F200
-G1 X18 Y42 Z72 A82 B78 C48 F200
-G1 X16 Y28 Z58 A72 B88 C62 F200
-G1 X20 Y18 Z42 A58 B82 C76 F200
-G1 X28 Y16 Z28 A42 B72 C86 F200
-G1 X38 Y20 Z18 A28 B58 C88 F200
-G1 X50 Y28 Z16 A18 B42 C82 F200
-G1 X66 Y38 Z20 A16 B28 C72 F200
-G1 X78 Y50 Z28 A20 B18 C58 F200
-G1 X86 Y64 Z40 A28 B16 C42 F200
-@LOOP`,
-  7: `; Chaotic recovery
-G1 X22 Y54 Z34 A72 B40 C62 F200
-G1 X34 Y68 Z28 A80 B26 C54 F200
-G1 X58 Y74 Z20 A66 B18 C42 F200
-G1 X76 Y62 Z26 A44 B24 C28 F200
-G1 X84 Y42 Z40 A26 B40 C18 F200
-G1 X72 Y26 Z58 A18 B62 C22 F200
-G1 X50 Y18 Z74 A24 B80 C36 F200
-G1 X30 Y24 Z86 A40 B84 C56 F200
-G1 X18 Y40 Z80 A62 B72 C74 F200
-G1 X20 Y62 Z62 A80 B52 C86 F200
-G1 X34 Y80 Z40 A86 B30 C76 F200
-G1 X56 Y86 Z24 A74 B18 C54 F200
-G1 X78 Y72 Z18 A54 B22 C34 F200
-G1 X88 Y50 Z24 A34 B36 C22 F200
-G1 X80 Y30 Z40 A22 B58 C20 F200
-G1 X60 Y18 Z60 A24 B78 C30 F200
-G1 X38 Y20 Z78 A38 B88 C48 F200
-G1 X24 Y34 Z88 A58 B80 C68 F200
-G1 X20 Y54 Z80 A76 B60 C82 F200
-G1 X28 Y72 Z62 A86 B38 C72 F200
-G1 X42 Y84 Z42 A78 B24 C52 F200
-G1 X60 Y80 Z28 A62 B20 C36 F200
-G1 X74 Y66 Z22 A46 B28 C26 F200
-G1 X78 Y48 Z26 A34 B42 C22 F200
-G1 X66 Y32 Z34 A28 B56 C28 F200
-G1 X48 Y24 Z42 A30 B64 C40 F200
-@LOOP`,
-};
 
 const legDefinitions = Array.from({ length: MOTOR_COUNT }, (_, index) => ({
   name: `Leg ${index + 1}`,
@@ -173,6 +27,7 @@ const state = {
   brightness: 160,
   lastNonZeroBrightness: 160,
   logLines: [],
+  spiderPrograms: {},
 };
 
 const elements = {
@@ -250,6 +105,45 @@ function setStatus(message, options = {}) {
   if (log) {
     appendLog(message);
   }
+}
+
+async function loadSpiderPrograms(options = {}) {
+  const { force = false } = options;
+
+  if (!force && Object.keys(state.spiderPrograms).length) {
+    return state.spiderPrograms;
+  }
+
+  const primaryUrl = window.location.origin && window.location.origin !== "null"
+    ? new URL("/api/spider-files", window.location.origin).toString()
+    : "./api/spider-files";
+  let response;
+
+  try {
+    response = await fetch(primaryUrl, { cache: "no-store" });
+  } catch (primaryError) {
+    response = await fetch("./api/spider-files", { cache: "no-store" });
+  }
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const programs = {};
+
+  for (const entry of payload.programs || []) {
+    programs[entry.code] = entry;
+  }
+
+  state.spiderPrograms = programs;
+  return programs;
+}
+
+function getSpiderProgramCodes() {
+  return Object.keys(state.spiderPrograms)
+    .map(Number)
+    .sort((left, right) => left - right);
 }
 
 function createMoveCommand(pose, previousPose, feed = SIM_FEED_REFERENCE, extra = {}) {
@@ -627,9 +521,7 @@ function parseLine(line, previousPose) {
   if (/^M215\s+S\d+\b/.test(cleaned)) {
     const codeMatch = cleaned.match(/\bS(\d+)\b/);
     const code = codeMatch ? Number(codeMatch[1]) : 0;
-    return SPIDER_SD_CODE_PROGRAMS[code]
-      ? { type: "spider-file", code }
-      : null;
+    return { type: "spider-file", code };
   }
 
   const isRapid = /^G0\b/.test(cleaned);
@@ -661,24 +553,22 @@ function parseLine(line, previousPose) {
     return null;
   }
 
-  const feedMatch = cleaned.match(/\bF(-?\d+(?:\.\d+)?)\b/);
-  const feed = feedMatch ? Math.max(1, Number(feedMatch[1])) : SIM_FEED_REFERENCE;
-  return createMoveCommand(pose, previousPose, feed);
+  return createMoveCommand(pose, previousPose, SIM_FEED_REFERENCE);
 }
 
-function parseProgram(programText) {
+async function parseProgram(programText) {
   const lines = programText.split(/\r?\n/);
   const commands = [];
   let loopForever = false;
   let previousPose = [...state.motors];
   let homedAxes = [...state.homedAxes];
 
-  lines.forEach((line) => {
+  for (const line of lines) {
     const trimmed = line.trim().toUpperCase();
 
     if (trimmed === "@LOOP" || trimmed === "LOOP") {
       loopForever = true;
-      return;
+      continue;
     }
 
     if (/^M215\s+H\b/.test(trimmed)) {
@@ -686,7 +576,7 @@ function parseProgram(programText) {
       commands.push(...preset.commands);
       previousPose = preset.pose;
       homedAxes = preset.homedAxes;
-      return;
+      continue;
     }
 
     if (/^M215\s+P1\b/.test(trimmed)) {
@@ -694,7 +584,7 @@ function parseProgram(programText) {
       commands.push(...preset.commands);
       previousPose = preset.pose;
       homedAxes = preset.homedAxes;
-      return;
+      continue;
     }
 
     if (/^M215\s+P2\b/.test(trimmed)) {
@@ -702,7 +592,7 @@ function parseProgram(programText) {
       commands.push(...preset.commands);
       previousPose = preset.pose;
       homedAxes = preset.homedAxes;
-      return;
+      continue;
     }
 
     if (/^M215\s+P3\b/.test(trimmed)) {
@@ -710,16 +600,21 @@ function parseProgram(programText) {
       commands.push(...preset.commands);
       previousPose = preset.pose;
       homedAxes = preset.homedAxes;
-      return;
+      continue;
     }
 
     const command = parseLine(line, previousPose);
     if (!command) {
-      return;
+      continue;
     }
 
     if (command.type === "spider-file") {
-      const embedded = parseProgram(SPIDER_SD_CODE_PROGRAMS[command.code]);
+      const spiderProgram = state.spiderPrograms[command.code];
+      if (!spiderProgram?.exists || typeof spiderProgram.content !== "string") {
+        throw new Error(`Spider file S${command.code} not found in gcode directory.`);
+      }
+
+      const embedded = await parseProgram(spiderProgram.content);
       commands.push(...embedded.commands);
       loopForever = loopForever || embedded.loopForever;
       if (embedded.commands.length) {
@@ -728,7 +623,7 @@ function parseProgram(programText) {
           previousPose = [...lastMove.pose];
         }
       }
-      return;
+      continue;
     }
 
     commands.push(command);
@@ -739,7 +634,7 @@ function parseProgram(programText) {
         homedAxes = homedAxes.map((value, index) => value || command.homeAxes[index]);
       }
     }
-  });
+  }
 
   return {
     commands,
@@ -779,7 +674,8 @@ function stopSequence() {
 async function runProgram() {
   stopSequence();
   const token = state.sequenceToken;
-  const program = parseProgram(elements.gcodeInput.value);
+  await loadSpiderPrograms();
+  const program = await parseProgram(elements.gcodeInput.value);
   const { commands, loopForever, homedAxes } = program;
 
   if (!commands.length) {
@@ -888,8 +784,14 @@ function runPresetCommand(command) {
   runProgram();
 }
 
-function runRandomSpiderFile() {
-  const codes = Object.keys(SPIDER_SD_CODE_PROGRAMS).map(Number);
+async function runRandomSpiderFile() {
+  await loadSpiderPrograms();
+  const codes = getSpiderProgramCodes();
+  if (!codes.length) {
+    setStatus("No spider files found in gcode directory.");
+    return;
+  }
+
   const code = codes[Math.floor(Math.random() * codes.length)];
   elements.gcodeInput.value = `M215 S${code}`;
   setStatus(`Random: M215 S${code}`);
@@ -934,9 +836,10 @@ if ("ResizeObserver" in window) {
 
 setStatus("Idle", { log: false });
 appendLog("WebApp ready.");
-
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js").catch(() => {});
+loadSpiderPrograms()
+  .then(() => {
+    appendLog(`Loaded ${getSpiderProgramCodes().length} spider files from gcode directory.`);
+  })
+  .catch((error) => {
+    appendLog(`Could not load spider files: ${error.message}`);
   });
-}

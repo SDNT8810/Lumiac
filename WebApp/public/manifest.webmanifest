@@ -1,0 +1,18 @@
+{
+  "name": "WebApp",
+  "short_name": "WebApp",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#e9e4da",
+  "theme_color": "#bfb7aa",
+  "icons": [
+    {
+      "src": "./logo.png",
+      "type": "image/png",
+      "sizes": "940x619",
+      "purpose": "any"
+    }
+  ]
+}

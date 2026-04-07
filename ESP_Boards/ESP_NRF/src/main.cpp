@@ -274,6 +274,8 @@ void setFeedRate(const int feed, const String& source, const String& reason) {
 
   currentFeedRate = nextFeedRate;
   logMessage(source, reason + " -> F" + String(currentFeedRate));
+  sendToOctopus("M220 S100", source, false);
+  sendToOctopus("G1 F" + String(currentFeedRate), source, false);
   broadcastState();
 }
 
@@ -360,6 +362,11 @@ void queryRandomCodes(const String& source) {
   sendToOctopus("M215", source);
 }
 
+void syncMotionSpeedToOctopus(const String& source) {
+  sendToOctopus("M220 S100", source, false);
+  sendToOctopus("G1 F" + String(currentFeedRate), source, false);
+}
+
 void runRandomPosition(const String& source) {
   if (!randomCodeCount) {
     logMessage(source, "Random position requested before M215 code list was available. Requesting M215 list.");
@@ -369,6 +376,7 @@ void runRandomPosition(const String& source) {
   }
 
   const uint16_t code = randomCodes[random(static_cast<long>(randomCodeCount))];
+  syncMotionSpeedToOctopus(source);
   sendToOctopus("M215 S" + String(code), source);
   broadcastStatus("Running random spider position S" + String(code) + ".");
 }
@@ -575,10 +583,12 @@ void handleRemoteCommand(const CommandPacket& packet) {
       break;
 
     case CMD_POS1:
+      syncMotionSpeedToOctopus(kRemoteBoardName);
       sendToOctopus("M215 P1", kRemoteBoardName);
       break;
 
     case CMD_POS2:
+      syncMotionSpeedToOctopus(kRemoteBoardName);
       sendToOctopus("M215 P2", kRemoteBoardName);
       break;
 
@@ -749,16 +759,19 @@ bool handleAction(const String& action, JsonVariantConst payload, const String& 
   }
 
   if (action == "home") {
+    syncMotionSpeedToOctopus(source);
     sendToOctopus("M215 H", source);
     return true;
   }
 
   if (action == "pos1") {
+    syncMotionSpeedToOctopus(source);
     sendToOctopus("M215 P1", source);
     return true;
   }
 
   if (action == "pos2") {
+    syncMotionSpeedToOctopus(source);
     sendToOctopus("M215 P2", source);
     return true;
   }

@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#bfb7aa" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="WebApp" />
+    <title>ESP_RF_Octopus</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="logo.jpg" type="image/jpeg" />
+    <link rel="apple-touch-icon" href="logo.jpg" />
+    <style>
+      :root {
+        --bg: #e9e4da;
+        --bg-shadow: #d7d1c6;
+        --surface: rgba(255, 252, 247, 0.78);
+        --surface-soft: rgba(247, 243, 236, 0.76);
+        --ink: #26241f;
+        --muted: #726d64;
+        --line: rgba(74, 69, 60, 0.12);
+        --metal-a: #7b7d80;
+        --metal-b: #c2c4c7;
+        --metal-c: #525458;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        min-height: 100%;
+        background:
+          radial-gradient(circle at top, rgba(255,255,255,0.58), transparent 38%),
+          linear-gradient(180deg, var(--bg) 0%, var(--bg-shadow) 100%);
+        color: var(--ink);
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        font-size: 14px;
+      }
+      body { min-height: 100vh; }
+      .app-shell { min-height: 100vh; padding: 12px; }
+      .panel { display: flex; flex-direction: column; gap: 12px; }
+      .card {
+        width: 100%;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 12px;
+        box-shadow: 0 12px 28px rgba(70, 64, 54, 0.08), inset 0 1px 0 rgba(255,255,255,0.48);
+        backdrop-filter: blur(12px);
+      }
+      .command-grid, .terminal-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+        width: 100%;
+      }
+      .command-block, .terminal-block {
+        background: var(--surface-soft);
+        border: 1px solid rgba(82,84,88,0.08);
+        border-radius: 12px;
+        padding: 10px;
+      }
+      .status-strip {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        width: 100%;
+      }
+      .status-pill {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(82,84,88,0.08);
+        background: rgba(255,255,255,0.52);
+        color: #4e5459;
+        font-size: 0.74rem;
+        width: 100%;
+      }
+      .status-pill.off .status-dot {
+        background: #a79f95;
+        box-shadow: none;
+      }
+      .status-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #8fbc8f;
+        box-shadow: 0 0 10px rgba(143,188,143,0.45);
+      }
+      .status-pill-label {
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        opacity: 0.7;
+      }
+      .button-row {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .button-row button {
+        padding: 8px 4px;
+        font-size: 0.64rem;
+        white-space: nowrap;
+      }
+      .card-head, .card-subhead {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .card-head { margin-bottom: 10px; }
+      .card-subhead { margin-bottom: 6px; }
+      .card-head h2, .card-subhead h3 {
+        margin: 0;
+        font-size: 0.82rem;
+        font-weight: 600;
+      }
+      .lamp-row {
+        display: grid;
+        grid-template-columns: 46px 1fr;
+        gap: 10px;
+        align-items: center;
+      }
+      button {
+        border: 1px solid rgba(82,84,88,0.08);
+        border-radius: 10px;
+        padding: 9px 10px;
+        background: linear-gradient(180deg, rgba(101,104,109,0.96), rgba(71,74,79,0.96));
+        color: #f8f6f1;
+        cursor: pointer;
+        font: inherit;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.16);
+      }
+      .ghost-button {
+        background: rgba(255,255,255,0.42);
+        color: var(--ink);
+      }
+      .danger-button {
+        background: linear-gradient(180deg, rgba(164,54,54,0.96), rgba(125,31,31,0.96));
+        color: #fff8f6;
+      }
+      .switch {
+        position: relative;
+        display: inline-flex;
+        width: 42px;
+        height: 24px;
+      }
+      .switch input {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        margin: 0;
+      }
+      .switch-track {
+        width: 100%;
+        height: 100%;
+        border-radius: 999px;
+        background: rgba(82,84,88,0.18);
+        border: 1px solid rgba(82,84,88,0.08);
+      }
+      .switch-track::after {
+        content: "";
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.14);
+        transition: transform 120ms ease;
+      }
+      .switch input:checked + .switch-track {
+        background: rgba(126,128,132,0.66);
+      }
+      .switch input:checked + .switch-track::after {
+        transform: translateX(18px);
+      }
+      input[type="range"] {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        margin: 0;
+        height: 20px;
+        background: transparent;
+      }
+      input[type="range"]::-webkit-slider-runnable-track {
+        height: 2px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, var(--metal-c), var(--metal-b) 52%, var(--metal-a));
+      }
+      input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 18px;
+        height: 18px;
+        margin-top: -8px;
+        border: none;
+        border-radius: 50%;
+        background: #8a8d91;
+      }
+      input[type="range"]::-moz-range-track {
+        height: 2px;
+        border: none;
+        border-radius: 999px;
+        background: linear-gradient(90deg, var(--metal-c), var(--metal-b) 52%, var(--metal-a));
+      }
+      input[type="range"]::-moz-range-thumb {
+        width: 18px;
+        height: 18px;
+        border: none;
+        border-radius: 50%;
+        background: #8a8d91;
+      }
+      textarea {
+        width: 100%;
+        min-height: 180px;
+        resize: vertical;
+        border: 1px solid rgba(82,84,88,0.1);
+        border-radius: 12px;
+        padding: 10px 12px;
+        background: rgba(255,253,250,0.92);
+        color: var(--ink);
+        font: 0.78rem/1.45 "IBM Plex Mono", "Courier New", monospace;
+      }
+      .hint-list {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 0.72rem;
+      }
+      .hint-list p { margin: 0; }
+      .terminal-log {
+        min-height: 180px;
+        max-height: 260px;
+        overflow: auto;
+        border: 1px solid rgba(82,84,88,0.1);
+        border-radius: 12px;
+        background: rgba(255,253,248,0.72);
+        padding: 10px 12px;
+        font: 0.74rem/1.45 "IBM Plex Mono", "Courier New", monospace;
+        white-space: pre-wrap;
+      }
+      code {
+        background: rgba(226,220,206,0.58);
+        border-radius: 6px;
+        padding: 1px 5px;
+      }
+      .radial-card {
+        padding-bottom: 10px;
+        background: radial-gradient(circle at center, rgba(255,255,255,0.45), transparent 54%), var(--surface);
+      }
+      .leg-ring-wrap {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: 100%;
+        overflow: hidden;
+        padding: 6px 0;
+      }
+      .leg-ring {
+        position: relative;
+        width: min(100%, 26rem);
+        aspect-ratio: 1;
+        margin: 0 auto;
+        min-width: 0;
+        --lamp-level: 0;
+      }
+      .home-button {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 5.2rem;
+        height: 5.2rem;
+        transform: translate(-50%, -50%);
+        border-radius: 50%;
+        border: 1px solid rgba(82,84,88,0.14);
+        background: linear-gradient(145deg, rgba(203,205,207,0.95), rgba(115,118,122,0.9));
+        color: #fffdf9;
+        box-shadow: inset 0 1px 1px rgba(255,255,255,0.42), 0 8px 16px rgba(74,69,60,0.12);
+        z-index: 3;
+        font-size: 0.88rem;
+      }
+      .leg-control {
+        position: absolute;
+        inset: 0;
+      }
+      .leg-axis {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 0;
+        height: 20px;
+        display: flex;
+        align-items: center;
+        pointer-events: none;
+        z-index: 2;
+        transform-origin: 0 50%;
+      }
+      .leg-slider {
+        position: relative;
+        width: 100%;
+        pointer-events: auto;
+      }
+      .leg-badge-anchor {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 0;
+        height: 0;
+        z-index: 1;
+        pointer-events: none;
+      }
+      .leg-badge {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 3.6rem;
+        height: 3.6rem;
+        transform: translate(-50%, -50%);
+        border: 1px solid rgba(255,244,223,0.8);
+        border-radius: 50%;
+        background:
+          radial-gradient(circle at 35% 30%,
+            rgba(255,255,255,calc(0.35 + var(--lamp-level) * 0.65)) 0%,
+            rgba(255,252,243,calc(0.22 + var(--lamp-level) * 0.74)) 38%,
+            rgba(255,247,226,calc(0.18 + var(--lamp-level) * 0.7)) 74%,
+            rgba(241,231,205,calc(0.16 + var(--lamp-level) * 0.8)) 100%);
+        box-shadow:
+          0 0 0 4px rgba(255,255,255,calc(0.04 + var(--lamp-level) * 0.2)),
+          0 0 calc(4px + var(--lamp-level) * 18px) rgba(255,244,215,calc(var(--lamp-level) * 0.6)),
+          0 8px 18px rgba(87,80,68,0.12);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        filter: saturate(calc(0.55 + var(--lamp-level) * 0.7)) brightness(calc(0.72 + var(--lamp-level) * 0.5));
+      }
+      .leg-badge-content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        text-align: center;
+      }
+      .leg-label {
+        color: rgba(70,66,58,0.76);
+        font-size: clamp(0.48rem, 1.1vw, 0.58rem);
+        line-height: 1;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .angle-readout {
+        color: #4f4f4c;
+        font-size: clamp(0.64rem, 1.5vw, 0.82rem);
+        line-height: 1;
+      }
+      @media (min-width: 760px) {
+        .app-shell { padding: 16px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <section class="panel">
+        <div class="card">
+          <div class="status-strip" aria-label="System status">
+            <div class="status-pill">
+              <span class="status-dot"></span><span class="status-pill-label">WiFi</span><span>On</span>
+            </div>
+            <div class="status-pill">
+              <span class="status-dot"></span><span class="status-pill-label">Octopus</span><span>Preview</span>
+            </div>
+            <div class="status-pill">
+              <span class="status-dot"></span><span class="status-pill-label">Remote</span><span>Preview</span>
+            </div>
+          </div>
+          <div class="command-grid" style="margin-top:10px;">
+            <div class="command-block">
+              <div class="button-row">
+                <button class="ghost-button" type="button">POS 1</button>
+                <button class="ghost-button" type="button">POS 2</button>
+                <button class="ghost-button" type="button">POS 3</button>
+                <button type="button">Random</button>
+                <button class="danger-button" type="button">Stop</button>
+                <button class="danger-button" type="button">Reset</button>
+              </div>
+            </div>
+            <div class="command-block">
+              <div class="card-subhead"><h3>Speed</h3><span>10</span></div>
+                <input type="range" min="0" max="100" step="1" value="10" />
+            </div>
+            <div class="command-block">
+              <div class="card-subhead"><h3>Lamp</h3><span>OFF 63</span></div>
+              <div class="lamp-row">
+                <label class="switch"><input type="checkbox" /><span class="switch-track"></span></label>
+                <input id="lampSlider" type="range" min="0" max="100" step="1" value="63" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card radial-card">
+          <div class="card-head"><h2>Legs</h2></div>
+          <div class="leg-ring-wrap">
+            <div id="legControls" class="leg-ring">
+              <button class="home-button" type="button">Home</button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="terminal-grid">
+            <section class="terminal-block">
+              <div class="card-head"><h2>Terminal</h2><button type="button">Send</button></div>
+              <textarea spellcheck="false" placeholder="Paste G-code or choose a file.">M215 P1</textarea>
+              <div class="hint-list"><p><code>G0</code> <code>G1</code> <code>G4 P...</code> <code>@LOOP</code> | Axes: <code>X Y Z A B C</code></p></div>
+            </section>
+            <section class="terminal-block">
+              <div class="card-head"><h2>Log</h2><button class="ghost-button" type="button">Clear Log</button></div>
+              <div class="terminal-log">[preview] Standalone WebApp-style template for ESP_RF_Octopus.</div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </div>
+    <script>
+      const axes = ["X", "Y", "Z", "A", "B", "C"];
+      const legControls = document.getElementById("legControls");
+      const lampSlider = document.getElementById("lampSlider");
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      function createLegControls() {
+        const fragment = document.createDocumentFragment();
+
+        axes.forEach((axis, index) => {
+          const angle = -90 + index * 60;
+          const control = document.createElement("div");
+          control.className = "leg-control";
+          control.dataset.angle = String(angle);
+
+          const arm = document.createElement("div");
+          arm.className = "leg-axis";
+
+          const slider = document.createElement("input");
+          slider.className = "leg-slider";
+          slider.type = "range";
+          slider.min = "0";
+          slider.max = "120";
+          slider.step = "1";
+          slider.value = "20";
+          arm.appendChild(slider);
+
+          const anchor = document.createElement("div");
+          anchor.className = "leg-badge-anchor";
+
+          const badge = document.createElement("div");
+          badge.className = "leg-badge";
+
+          const content = document.createElement("div");
+          content.className = "leg-badge-content";
+
+          const label = document.createElement("span");
+          label.className = "leg-label";
+          label.textContent = `L${index + 1} ${axis}`;
+
+          const readout = document.createElement("span");
+          readout.className = "angle-readout";
+          readout.textContent = "20°";
+
+          slider.addEventListener("input", () => {
+            readout.textContent = `${Math.round(Number(slider.value))}°`;
+          });
+
+          content.appendChild(label);
+          content.appendChild(readout);
+          badge.appendChild(content);
+          anchor.appendChild(badge);
+          control.appendChild(arm);
+          control.appendChild(anchor);
+          fragment.appendChild(control);
+        });
+
+        legControls.appendChild(fragment);
+      }
+
+      function layoutLegControls() {
+        const ringSize = legControls.clientWidth;
+        if (!ringSize) return;
+
+        const center = ringSize / 2;
+        const homeSize = clamp(ringSize * 0.24, 68, 104);
+        const badgeSize = clamp(ringSize * 0.15, 48, 64);
+        const edgeGap = ringSize * 0.04;
+        const centerGap = ringSize * 0.02;
+        const badgeRadius = center - badgeSize / 2 - edgeGap;
+        const armStart = homeSize / 2 + centerGap;
+        const armEndGap = badgeSize * 0.72;
+        const armLength = Math.max(24, badgeRadius - armStart - armEndGap);
+
+        Array.from(legControls.querySelectorAll(".home-button")).forEach((button) => {
+          button.style.width = `${homeSize}px`;
+          button.style.height = `${homeSize}px`;
+        });
+
+        Array.from(legControls.querySelectorAll(".leg-control")).forEach((control) => {
+          const angle = Number(control.dataset.angle);
+          const radians = (angle * Math.PI) / 180;
+          const ux = Math.cos(radians);
+          const uy = Math.sin(radians);
+          const axis = control.querySelector(".leg-axis");
+          const anchor = control.querySelector(".leg-badge-anchor");
+          const badge = control.querySelector(".leg-badge");
+          const content = control.querySelector(".leg-badge-content");
+
+          axis.style.left = `${center + ux * armStart}px`;
+          axis.style.top = `${center + uy * armStart}px`;
+          axis.style.width = `${armLength}px`;
+          axis.style.transform = `translateY(-50%) rotate(${angle}deg)`;
+
+          anchor.style.left = `${center + ux * badgeRadius}px`;
+          anchor.style.top = `${center + uy * badgeRadius}px`;
+          badge.style.width = `${badgeSize}px`;
+          badge.style.height = `${badgeSize}px`;
+          content.style.transform = `rotate(${-angle}deg)`;
+        });
+      }
+
+      function syncLamp() {
+        const level = clamp(Number(lampSlider.value) / 100, 0, 1);
+        legControls.style.setProperty("--lamp-level", String(level));
+      }
+
+      createLegControls();
+      layoutLegControls();
+      syncLamp();
+      lampSlider.addEventListener("input", syncLamp);
+      window.addEventListener("resize", layoutLegControls);
+      if ("ResizeObserver" in window) {
+        new ResizeObserver(layoutLegControls).observe(legControls);
+      }
+    </script>
+  </body>
+</html>
