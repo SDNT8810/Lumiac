@@ -54,9 +54,12 @@ constexpr uint8_t kLowHeapStrikeLimit = 3;
 constexpr uint32_t kDebounceMs = 35;
 constexpr uint32_t kDimmerStepMs = 180;
 constexpr uint8_t kDimmerStep = 16;
-constexpr uint32_t kStartupHomeDelayMs = 4000;
+constexpr uint32_t kStartupHomeDelayMs = 8000;
 constexpr uint32_t kResetHomeDelayMs = 1200;
 constexpr uint32_t kStartupAutoplayDelayMs = 500;
+constexpr uint32_t kStartupHomeTimeoutMs = 30000;
+constexpr uint32_t kStartupHomeRetryDelayMs = 2500;
+constexpr uint8_t kStartupHomeRetryLimit = 1;
 constexpr uint8_t kMotionStopRepeatCount = 3;
 constexpr uint32_t kMotionStopRepeatDelayMs = 20;
 constexpr uint32_t kWebSocketHeartbeatMs = 10000;
@@ -122,6 +125,7 @@ ButtonState buttons[kButtonCount] = {
 
 LightState lightState;
 bool octopusOnline = false;
+bool octopusFirmwareReady = false;
 bool remoteOnline = false;
 bool spiderProgramActive = false;
 bool spiderProgramPaused = false;
@@ -147,11 +151,13 @@ uint32_t lastRemoteActivityMs = 0;
 uint32_t lastHealthCheckMs = 0;
 uint32_t lastDimmerStepMs = 0;
 uint32_t startupHomeReadyMs = 0;
+uint32_t startupHomeStartedMs = 0;
 uint32_t startupAutoRunReadyMs = 0;
 uint32_t spiderLoopRestartReadyMs = 0;
 uint32_t octopusResetVerifyDeadlineMs = 0;
 uint8_t lowHeapStrikeCount = 0;
 uint8_t connectedStationCount = 0;
+uint8_t startupHomeRetryCount = 0;
 
 String serialLine;
 String remoteIpString = "RF 8CH";
@@ -601,6 +607,8 @@ void cancelStartupAutomation(const String& source, const char* reason) {
 
   startupHomePending = false;
   startupHomeInProgress = false;
+  startupHomeStartedMs = 0;
+  startupHomeRetryCount = 0;
   startupAutoRunPending = false;
   startupAutoRunArmed = false;
   startupAutoRunReadyMs = 0;
@@ -721,15 +729,41 @@ void runRandomPosition(const String& source) {
 void runStartupHomeIfReady() {
   if (!startupHomePending) return;
   if (!octopusOnline) return;
+  if (!octopusFirmwareReady) return;
 
   const uint32_t now = millis();
   if (now < startupHomeReadyMs) return;
 
   startupHomePending = false;
   startupHomeInProgress = true;
+  startupHomeStartedMs = now;
   broadcastStatus("Running startup home.");
   prepareMotionCommand(kBoardName, "startup home");
   sendToOctopus("M215 H", kBoardName);
+}
+
+void recoverStartupHomeIfStalled() {
+  if (!startupHomeInProgress) return;
+  if (!startupHomeStartedMs) return;
+
+  const uint32_t now = millis();
+  if (now - startupHomeStartedMs < kStartupHomeTimeoutMs) return;
+
+  startupHomeInProgress = false;
+  startupHomeStartedMs = 0;
+
+  if (startupHomeRetryCount < kStartupHomeRetryLimit) {
+    ++startupHomeRetryCount;
+    startupHomePending = true;
+    startupHomeReadyMs = now + kStartupHomeRetryDelayMs;
+    logMessage(kBoardName, "Startup home did not complete in time. Retrying once after a short settle delay.");
+    broadcastStatus("Startup home retrying.");
+    return;
+  }
+
+  startupHomeRetryCount = 0;
+  logMessage(kBoardName, "Startup home timed out. Waiting for manual Home or Reset.");
+  broadcastStatus("Startup home stalled.");
 }
 
 void runStartupLoopIfReady() {
@@ -806,6 +840,7 @@ void handleOctopusLine(const String& rawLine) {
   String line = rawLine;
   line.trim();
   if (!line.length()) return;
+  const bool spiderRunLine = line.startsWith("Running spider ") && line.indexOf(':') >= 0;
 
   if (!isTelemetryOnlyLine(line))
     if (!isBenignSpiderStatusLine(line))
@@ -815,10 +850,10 @@ void handleOctopusLine(const String& rawLine) {
   parsePositionLine(line);
   parseRandomCodeLine(line);
 
-  if (line.startsWith("Running spider ") || line == "Resumed spider SD file." || line == "Paused spider SD file.")
+  if (spiderRunLine || line == "Resumed spider SD file." || line == "Paused spider SD file.")
     spiderProgramActive = true;
 
-  if (line.startsWith("Running spider ") || line == "Resumed spider SD file.")
+  if (spiderRunLine || line == "Resumed spider SD file.")
     spiderProgramPaused = false;
   else if (line == "Paused spider SD file.")
     spiderProgramPaused = true;
@@ -836,7 +871,7 @@ void handleOctopusLine(const String& rawLine) {
   if (line == "Paused spider SD file." && !spiderPauseForAdjustment && !manualSpiderPauseRequested)
     scheduleSpiderLoopRestart("Octopus", "unsolicited pause");
 
-  if (line.startsWith("Running spider ") || line == "Resumed spider SD file.") {
+  if (spiderRunLine || line == "Resumed spider SD file.") {
     spiderLoopRestartPending = false;
     spiderLoopRestartReadyMs = 0;
     manualSpiderPauseRequested = false;
@@ -846,6 +881,8 @@ void handleOctopusLine(const String& rawLine) {
 
   if ((line == "Spider homing complete." || line == "Spider grouped homing complete.") && startupHomeInProgress && startupAutoRunPending) {
     startupHomeInProgress = false;
+    startupHomeStartedMs = 0;
+    startupHomeRetryCount = 0;
     startupAutoRunArmed = true;
     startupAutoRunReadyMs = millis() + kStartupAutoplayDelayMs;
     broadcastStatus("Startup home complete. Preparing S1.");
@@ -853,6 +890,7 @@ void handleOctopusLine(const String& rawLine) {
 
   if (line.startsWith("FIRMWARE_NAME:")) {
     octopusOnline = true;
+    octopusFirmwareReady = true;
     spiderProgramActive = false;
     spiderProgramPaused = false;
     startupHomeInProgress = false;
@@ -868,6 +906,12 @@ void handleOctopusLine(const String& rawLine) {
       startupHomeReadyMs = millis() + kResetHomeDelayMs;
       broadcastStatus("Octopus reset complete. Restoring speed and home.");
     }
+    else if (startupHomePending && !startupHomeInProgress) {
+      startupHomeReadyMs = millis() + kStartupHomeDelayMs;
+      broadcastStatus("Octopus online. Waiting before startup home.");
+    }
+    sendToOctopus("M114", kBoardName, false);
+    queryRandomCodes(kBoardName);
     syncLampStateToOctopus(kBoardName);
   }
 }
@@ -889,6 +933,7 @@ void pulseOctopusResetLine(const String& reason) {
   logMessage(kBoardName, "Pulsing Octopus reset line: " + reason);
 
   octopusOnline = false;
+  octopusFirmwareReady = false;
   spiderProgramActive = false;
   spiderProgramPaused = false;
   waitingForRandomCodeList = false;
@@ -1396,9 +1441,7 @@ void setup() {
 
   delay(300);
   sendToOctopus("M115");
-  sendToOctopus("M114");
-  queryRandomCodes(kBoardName);
-  startupHomeReadyMs = millis() + kStartupHomeDelayMs;
+  startupHomeReadyMs = 0;
   broadcastState();
 }
 
@@ -1413,6 +1456,7 @@ void loop() {
   pollOctopusState();
   pollRandomCodes();
   runStartupHomeIfReady();
+  recoverStartupHomeIfStalled();
   runStartupLoopIfReady();
   runSpiderLoopRestartIfReady();
   recoverOctopusLink();
@@ -1427,6 +1471,7 @@ void loop() {
 
   if (octopusOnline && now - lastOctopusRxMs > kOctopusOfflineMs) {
     octopusOnline = false;
+    octopusFirmwareReady = false;
     logMessage(kBoardName, "Octopus serial RX heartbeat timed out.");
     broadcastState();
   }
