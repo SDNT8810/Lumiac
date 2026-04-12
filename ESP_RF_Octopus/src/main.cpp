@@ -31,14 +31,15 @@ constexpr int kMinFeedRate = 10;
 constexpr int kMaxFeedRate = 400;
 constexpr int kMaxAxisPosition = 119;
 
-constexpr uint8_t kLightOnPin = 13;
-constexpr uint8_t kLightOffPin = 14;
+constexpr uint8_t kLightOnPin = 14;
+constexpr uint8_t kLightOffPin = 32;
 constexpr uint8_t kPos1Pin = 25;
-constexpr uint8_t kPos2Pin = 26;
-constexpr uint8_t kRandomPin = 27;
-constexpr uint8_t kDimmerPin = 32;
-constexpr uint8_t kPos3Pin = 33;
-constexpr uint8_t kHomePin = 4;
+constexpr uint8_t kPos2Pin = 33;
+constexpr uint8_t kRandomPin = 26;
+constexpr uint8_t kDimmerPin = 13;
+constexpr uint8_t kPos3Pin = 27;
+constexpr uint8_t kReservePin = 21;
+constexpr bool kRfButtonsActiveLow = false;
 
 constexpr uint32_t kStatePollMs = 1500;
 constexpr uint32_t kRandomCodePollMs = 15000;
@@ -51,21 +52,24 @@ constexpr uint32_t kOctopusResetCooldownMs = 180000;
 constexpr uint32_t kHealthCheckMs = 60000;
 constexpr uint32_t kLowHeapThresholdBytes = 30000;
 constexpr uint8_t kLowHeapStrikeLimit = 3;
-constexpr uint32_t kDebounceMs = 35;
-constexpr uint32_t kDimmerStepMs = 180;
+constexpr uint32_t kDebounceMs = 8;
 constexpr uint8_t kDimmerStep = 16;
+constexpr uint32_t kDimmerHoldStartMs = 180;
+constexpr uint32_t kDimmerHoldRepeatMs = 120;
+constexpr uint32_t kDimmerHoldSafetyMs = 1500;
 constexpr uint32_t kStartupHomeDelayMs = 8000;
 constexpr uint32_t kResetHomeDelayMs = 1200;
 constexpr uint32_t kStartupAutoplayDelayMs = 500;
-constexpr uint32_t kStartupHomeTimeoutMs = 30000;
+constexpr uint32_t kStartupHomeTimeoutMs = 180000;
+constexpr uint32_t kStartupHomeProgressTimeoutMs = 20000;
 constexpr uint32_t kStartupHomeRetryDelayMs = 2500;
-constexpr uint8_t kStartupHomeRetryLimit = 1;
-constexpr uint8_t kMotionStopRepeatCount = 3;
-constexpr uint32_t kMotionStopRepeatDelayMs = 20;
+constexpr uint8_t kStartupHomeRetryLimit = 2;
+constexpr uint8_t kMotionStopRepeatCount = 2;
 constexpr uint32_t kWebSocketHeartbeatMs = 10000;
 constexpr uint32_t kWebSocketPongTimeoutMs = 3000;
 constexpr uint8_t kWebSocketDisconnectCount = 2;
 constexpr uint32_t kManualResetVerifyTimeoutMs = 15000;
+constexpr uint32_t kRfInputArmDelayMs = 3000;
 constexpr size_t kSerialLineMax = 256;
 constexpr size_t kMaxRandomCodes = 16;
 constexpr size_t kLogHistorySize = 120;
@@ -88,7 +92,7 @@ enum ButtonIndex : size_t {
   kButtonRandom,
   kButtonDimmer,
   kButtonPos3,
-  kButtonHome,
+  kButtonReserve,
   kButtonCount
 };
 
@@ -100,7 +104,7 @@ struct ButtonState {
   uint32_t lastChangeMs;
 
   ButtonState(const char* buttonName, const uint8_t buttonPin)
-    : name(buttonName), pin(buttonPin), stableLevel(HIGH), lastRead(HIGH), lastChangeMs(0) {}
+    : name(buttonName), pin(buttonPin), stableLevel(kRfButtonsActiveLow ? HIGH : LOW), lastRead(kRfButtonsActiveLow ? HIGH : LOW), lastChangeMs(0) {}
 };
 
 DNSServer dnsServer;
@@ -120,7 +124,7 @@ ButtonState buttons[kButtonCount] = {
   { "RANDOM", kRandomPin },
   { "DIMMER", kDimmerPin },
   { "POS3", kPos3Pin },
-  { "HOME", kHomePin },
+  { "RESERVE", kReservePin },
 };
 
 LightState lightState;
@@ -130,16 +134,17 @@ bool remoteOnline = false;
 bool spiderProgramActive = false;
 bool spiderProgramPaused = false;
 int currentFeedRate = 200;
-bool dimmerPressed = false;
 int8_t dimmerDirection = 1;
 bool startupHomePending = true;
 bool startupHomeInProgress = false;
 bool startupAutoRunPending = true;
 bool startupAutoRunArmed = false;
 bool octopusResetVerifyPending = false;
+bool startupHomeRecoveryResetUsed = false;
 bool spiderPauseForAdjustment = false;
 bool manualSpiderPauseRequested = false;
 bool spiderLoopRestartPending = false;
+bool rfInputsArmed = false;
 
 uint32_t lastStatePollMs = 0;
 uint32_t lastRandomCodeQueryMs = 0;
@@ -149,12 +154,12 @@ uint32_t lastOctopusSerialReinitMs = 0;
 uint32_t lastOctopusHardwareResetMs = 0;
 uint32_t lastRemoteActivityMs = 0;
 uint32_t lastHealthCheckMs = 0;
-uint32_t lastDimmerStepMs = 0;
 uint32_t startupHomeReadyMs = 0;
 uint32_t startupHomeStartedMs = 0;
 uint32_t startupAutoRunReadyMs = 0;
 uint32_t spiderLoopRestartReadyMs = 0;
 uint32_t octopusResetVerifyDeadlineMs = 0;
+uint32_t rfInputsArmReadyMs = 0;
 uint8_t lowHeapStrikeCount = 0;
 uint8_t connectedStationCount = 0;
 uint8_t startupHomeRetryCount = 0;
@@ -165,6 +170,11 @@ String desiredSpiderLoopCommand;
 String logHistory[kLogHistorySize];
 size_t logHistoryStart = 0;
 size_t logHistoryCount = 0;
+volatile uint32_t rfInterruptMask = 0;
+
+uint32_t dimmerPressedMs = 0;
+uint32_t lastDimmerRepeatMs = 0;
+bool dimmerRepeatBlockedUntilRelease = false;
 
 void sendToOctopus(const String& line, const String& source = kBoardName, const bool logTx = true);
 bool pauseSpiderProgramForAdjustment(const String& source, const String& reason);
@@ -175,6 +185,32 @@ void clearDesiredSpiderLoop();
 void setDesiredSpiderLoop(const String& gcode);
 void scheduleSpiderLoopRestart(const String& source, const String& reason, const uint32_t delayMs = 150);
 void runSpiderLoopRestartIfReady();
+bool startupAutomationActive();
+void updateDimmerHold(const uint32_t now);
+void issueImmediateOverride(const String& source, const char* reason = nullptr);
+void moveAllLegsToPosition(const String& source, const char* reason, const int target);
+bool requestAutomaticOctopusReset(const String& source, const String& reason, const String& statusMessage);
+
+void IRAM_ATTR onRfLightOnChange() { rfInterruptMask |= (1UL << kButtonLightOn); }
+void IRAM_ATTR onRfLightOffChange() { rfInterruptMask |= (1UL << kButtonLightOff); }
+void IRAM_ATTR onRfPos1Change() { rfInterruptMask |= (1UL << kButtonPos1); }
+void IRAM_ATTR onRfPos2Change() { rfInterruptMask |= (1UL << kButtonPos2); }
+void IRAM_ATTR onRfRandomChange() { rfInterruptMask |= (1UL << kButtonRandom); }
+void IRAM_ATTR onRfDimmerChange() { rfInterruptMask |= (1UL << kButtonDimmer); }
+void IRAM_ATTR onRfPos3Change() { rfInterruptMask |= (1UL << kButtonPos3); }
+void IRAM_ATTR onRfReserveChange() { rfInterruptMask |= (1UL << kButtonReserve); }
+
+using ButtonInterruptHandler = void (*)();
+constexpr ButtonInterruptHandler kRfInterruptHandlers[kButtonCount] = {
+  onRfLightOnChange,
+  onRfLightOffChange,
+  onRfPos1Change,
+  onRfPos2Change,
+  onRfRandomChange,
+  onRfDimmerChange,
+  onRfPos3Change,
+  onRfReserveChange
+};
 
 void initStringStorage() {
   serialLine.reserve(kSerialLineMax);
@@ -195,6 +231,10 @@ uint8_t clampBrightness(const int value) {
   return static_cast<uint8_t>(constrain(value, 0, 255));
 }
 
+bool isRfPressed(const bool level) {
+  return kRfButtonsActiveLow ? level == LOW : level == HIGH;
+}
+
 String formatLogLine(const String& source, const String& message) {
   return "[" + source + "] " + message;
 }
@@ -212,7 +252,10 @@ void appendLogHistory(const String& line) {
 }
 
 bool isTelemetryOnlyLine(const String& line) {
-  return line == "ok" || line.startsWith("X:");
+  return line == "ok"
+      || line.startsWith("X:")
+      || line.startsWith("busy:")
+      || line.startsWith("echo:busy:");
 }
 
 bool isBenignSpiderStatusLine(const String& line) {
@@ -288,6 +331,15 @@ void fillStateDocument(JsonDocument& doc) {
   lights["lastNonZeroBrightness"] = lightState.lastNonZeroBrightness;
   lights["driver"] = "octopus_m355";
   lights["output"] = "configured_bed_or_heater";
+
+  JsonObject remoteButtons = doc["remoteButtons"].to<JsonObject>();
+  remoteButtons["lightOn"] = isRfPressed(buttons[kButtonLightOn].stableLevel);
+  remoteButtons["lightOff"] = isRfPressed(buttons[kButtonLightOff].stableLevel);
+  remoteButtons["pos1"] = isRfPressed(buttons[kButtonPos1].stableLevel);
+  remoteButtons["pos2"] = isRfPressed(buttons[kButtonPos2].stableLevel);
+  remoteButtons["random"] = isRfPressed(buttons[kButtonRandom].stableLevel);
+  remoteButtons["dimmer"] = isRfPressed(buttons[kButtonDimmer].stableLevel);
+  remoteButtons["pos3"] = isRfPressed(buttons[kButtonPos3].stableLevel);
 
   JsonArray codes = doc["randomCodes"].to<JsonArray>();
   for (size_t i = 0; i < randomCodeCount; ++i)
@@ -491,17 +543,14 @@ void abortActiveSpiderProgram(const String& source, const char* reason = nullptr
   sendToOctopus("M215 X", source, false);
   spiderProgramActive = false;
   spiderProgramPaused = false;
-  delay(kMotionStopRepeatDelayMs);
 }
 
 void sendMotionStopBurst(const String& source, const char* reason = nullptr) {
   if (reason && *reason)
     logMessage(source, String("Issuing stop burst before ") + reason + ".");
 
-  for (uint8_t i = 0; i < kMotionStopRepeatCount; ++i) {
+  for (uint8_t i = 0; i < kMotionStopRepeatCount; ++i)
     sendToOctopus("M410", source, false);
-    delay(kMotionStopRepeatDelayMs);
-  }
 }
 
 void clearOctopusPausedState(const String& source, const char* reason = nullptr) {
@@ -509,7 +558,6 @@ void clearOctopusPausedState(const String& source, const char* reason = nullptr)
     logMessage(source, String("Clearing Octopus pause state before ") + reason + ".");
 
   sendToOctopus("M108", source, false);
-  delay(kMotionStopRepeatDelayMs);
 }
 
 void forceAbortSpiderProgram(const String& source, const char* reason = nullptr) {
@@ -519,7 +567,7 @@ void forceAbortSpiderProgram(const String& source, const char* reason = nullptr)
   sendToOctopus("M215 X", source, false);
   spiderProgramActive = false;
   spiderProgramPaused = false;
-  delay(kMotionStopRepeatDelayMs);
+  spiderPauseForAdjustment = false;
 }
 
 void syncMotionSpeedToOctopus(const String& source, const bool spiderJob = false) {
@@ -544,7 +592,6 @@ bool pauseSpiderProgramForAdjustment(const String& source, const String& reason)
   spiderPauseForAdjustment = true;
   sendToOctopus("M215 P", source, false);
   spiderProgramPaused = true;
-  delay(kMotionStopRepeatDelayMs);
   return true;
 }
 
@@ -558,10 +605,18 @@ void resumeSpiderProgramAfterAdjustment(const String& source, const String& reas
 }
 
 void prepareMotionCommand(const String& source, const char* reason, const bool spiderJob = false) {
-  clearOctopusPausedState(source, reason);
-  forceAbortSpiderProgram(source, reason);
-  sendMotionStopBurst(source, reason);
+  issueImmediateOverride(source, reason);
   syncMotionSpeedToOctopus(source, spiderJob);
+}
+
+void issueImmediateOverride(const String& source, const char* reason) {
+  clearOctopusPausedState(source, reason);
+  sendMotionStopBurst(source, reason);
+  forceAbortSpiderProgram(source, reason);
+  sendToOctopus("M410", source, false);
+  spiderProgramActive = false;
+  spiderProgramPaused = false;
+  spiderPauseForAdjustment = false;
 }
 
 void clearDesiredSpiderLoop() {
@@ -623,6 +678,54 @@ bool handleSimpleAction(const String& action, const String& source) {
   return handleAction(action, doc.as<JsonVariantConst>(), source);
 }
 
+void runSpiderLoopS1(const String& source, const char* reason) {
+  cancelStartupAutomation(source, reason);
+  prepareMotionCommand(source, reason, true);
+  setDesiredSpiderLoop("M215 S1");
+  sendToOctopus("M215 S1", source);
+  spiderProgramActive = true;
+  spiderProgramPaused = false;
+  broadcastStatus("Running spider loop S1.");
+  broadcastState();
+}
+
+void stopMotionAndTurnLightsOff(const String& source, const char* reason) {
+  clearDesiredSpiderLoop();
+  cancelStartupAutomation(source, reason);
+  clearOctopusPausedState(source, reason);
+  forceAbortSpiderProgram(source, reason);
+  sendMotionStopBurst(source, reason);
+  spiderProgramActive = false;
+  spiderProgramPaused = false;
+  turnLightsOff(source, reason);
+  broadcastStatus("Lights off. Motion stopped.");
+  broadcastState();
+}
+
+void moveAllLegsToPosition(const String& source, const char* reason, const int target) {
+  const int clampedTarget = constrain(target, 0, kMaxAxisPosition);
+  clearDesiredSpiderLoop();
+  cancelStartupAutomation(source, reason);
+  prepareMotionCommand(source, reason);
+
+  String gcode = "G1";
+  for (size_t i = 0; i < kAxisCount; ++i) {
+    axisPositions[i] = static_cast<float>(clampedTarget);
+    gcode += ' ';
+    gcode += kAxes[i];
+    gcode += String(clampedTarget);
+  }
+  gcode += " F";
+  gcode += String(currentFeedRate);
+
+  sendToOctopus("G90", source, false);
+  sendToOctopus(gcode, source);
+  spiderProgramActive = false;
+  spiderProgramPaused = false;
+  broadcastStatus(String(reason) + " -> all legs to " + String(clampedTarget) + ".");
+  broadcastState();
+}
+
 void stepDimmer(const String& source, const String& reason) {
   const int baseBrightness = lightState.on
     ? lightState.brightness
@@ -637,29 +740,32 @@ void handleRfButtonPressed(const ButtonIndex index) {
   switch (index) {
     case kButtonLightOn:
       turnLightsOn(kRemoteBoardName, "RF LIGHT_ON");
+      runSpiderLoopS1(kRemoteBoardName, "RF LIGHT_ON");
       return;
     case kButtonLightOff:
-      turnLightsOff(kRemoteBoardName, "RF LIGHT_OFF");
+      stopMotionAndTurnLightsOff(kRemoteBoardName, "RF LIGHT_OFF");
       return;
     case kButtonPos1:
-      handleSimpleAction("pos1", kRemoteBoardName);
+      moveAllLegsToPosition(kRemoteBoardName, "RF P1", 0);
       return;
     case kButtonPos2:
-      handleSimpleAction("pos2", kRemoteBoardName);
+      moveAllLegsToPosition(kRemoteBoardName, "RF P2", 55);
       return;
     case kButtonRandom:
       handleSimpleAction("random_position", kRemoteBoardName);
       return;
     case kButtonDimmer:
-      dimmerPressed = true;
-      lastDimmerStepMs = millis();
+      dimmerPressedMs = millis();
+      lastDimmerRepeatMs = dimmerPressedMs;
+      dimmerRepeatBlockedUntilRelease = false;
       stepDimmer(kRemoteBoardName, "RF DIMMER");
       return;
     case kButtonPos3:
-      handleSimpleAction("pos3", kRemoteBoardName);
+      moveAllLegsToPosition(kRemoteBoardName, "RF P3", 115);
       return;
-    case kButtonHome:
-      handleSimpleAction("home", kRemoteBoardName);
+    case kButtonReserve:
+      logMessage(kRemoteBoardName, "RESERVE button pressed. No action assigned.");
+      broadcastStatus("Reserve RF button pressed.");
       return;
     default:
       return;
@@ -669,7 +775,9 @@ void handleRfButtonPressed(const ButtonIndex index) {
 void handleRfButtonReleased(const ButtonIndex index) {
   if (index != kButtonDimmer) return;
 
-  dimmerPressed = false;
+  dimmerPressedMs = 0;
+  lastDimmerRepeatMs = 0;
+  dimmerRepeatBlockedUntilRelease = false;
   dimmerDirection = -dimmerDirection;
   logMessage(kRemoteBoardName, String("DIMMER released. Next direction=") + (dimmerDirection > 0 ? "up" : "down"));
 }
@@ -677,36 +785,88 @@ void handleRfButtonReleased(const ButtonIndex index) {
 void pollRfButtons() {
   const uint32_t now = millis();
 
-  for (size_t i = 0; i < kButtonCount; ++i) {
-    ButtonState& button = buttons[i];
-    const bool level = digitalRead(button.pin);
-
-    if (level != button.lastRead) {
+  if (!rfInputsArmed) {
+    for (size_t i = 0; i < kButtonCount; ++i) {
+      ButtonState& button = buttons[i];
+      const bool level = digitalRead(button.pin);
+      button.stableLevel = level;
       button.lastRead = level;
       button.lastChangeMs = now;
     }
 
-    if (now - button.lastChangeMs < kDebounceMs) continue;
+    if (now < rfInputsArmReadyMs) return;
+    if (startupAutomationActive()) return;
+
+    rfInputsArmed = true;
+    noInterrupts();
+    rfInterruptMask = 0;
+    interrupts();
+    logMessage(kBoardName, "RF inputs armed after startup automation completed.");
+    return;
+  }
+
+  uint32_t interruptMask = 0;
+  noInterrupts();
+  interruptMask = rfInterruptMask;
+  rfInterruptMask = 0;
+  interrupts();
+
+  bool stateChanged = false;
+  bool debouncePending = false;
+
+  for (size_t i = 0; i < kButtonCount; ++i) {
+    ButtonState& button = buttons[i];
+    if (interruptMask & (1UL << i)) {
+      const bool level = digitalRead(button.pin);
+      if (level != button.lastRead) {
+        button.lastRead = level;
+        button.lastChangeMs = now;
+      }
+    }
+
     if (button.stableLevel == button.lastRead) continue;
+    if (now - button.lastChangeMs < kDebounceMs) {
+      debouncePending = true;
+      continue;
+    }
 
     button.stableLevel = button.lastRead;
-    if (button.stableLevel == LOW) {
+    if (isRfPressed(button.stableLevel)) {
       handleRfButtonPressed(static_cast<ButtonIndex>(i));
     } else {
       handleRfButtonReleased(static_cast<ButtonIndex>(i));
     }
+    stateChanged = true;
   }
+
+  updateDimmerHold(now);
+
+  if (stateChanged)
+    broadcastState();
+
+  if (!stateChanged && !debouncePending && buttons[kButtonDimmer].stableLevel != LOW && !interruptMask)
+    return;
 }
 
-void updateDimmerHold() {
-  if (!dimmerPressed) return;
+void updateDimmerHold(const uint32_t now) {
+  if (!isRfPressed(buttons[kButtonDimmer].stableLevel)) return;
+  if (!dimmerPressedMs) return;
+  if (dimmerRepeatBlockedUntilRelease) return;
+  if (now - dimmerPressedMs < kDimmerHoldStartMs) return;
 
-  const uint32_t now = millis();
-  if (now - lastDimmerStepMs < kDimmerStepMs) return;
+  if (now - dimmerPressedMs >= kDimmerHoldSafetyMs) {
+    dimmerRepeatBlockedUntilRelease = true;
+    logMessage(kRemoteBoardName, "DIMMER hold safety cutoff reached. Waiting for release.");
+    broadcastState();
+    return;
+  }
 
-  lastDimmerStepMs = now;
+  if (now - lastDimmerRepeatMs < kDimmerHoldRepeatMs) return;
+
+  lastDimmerRepeatMs = now;
   markRemoteActivity("dimmer hold");
-  stepDimmer(kRemoteBoardName, "RF DIMMER");
+  stepDimmer(kRemoteBoardName, "RF DIMMER HOLD");
+  broadcastState();
 }
 
 void runRandomPosition(const String& source) {
@@ -747,7 +907,9 @@ void recoverStartupHomeIfStalled() {
   if (!startupHomeStartedMs) return;
 
   const uint32_t now = millis();
-  if (now - startupHomeStartedMs < kStartupHomeTimeoutMs) return;
+  const bool hardTimedOut = now - startupHomeStartedMs >= kStartupHomeTimeoutMs;
+  const bool octopusStillTalking = now - lastOctopusRxMs < kStartupHomeProgressTimeoutMs;
+  if (!hardTimedOut && octopusStillTalking) return;
 
   startupHomeInProgress = false;
   startupHomeStartedMs = 0;
@@ -756,13 +918,32 @@ void recoverStartupHomeIfStalled() {
     ++startupHomeRetryCount;
     startupHomePending = true;
     startupHomeReadyMs = now + kStartupHomeRetryDelayMs;
-    logMessage(kBoardName, "Startup home did not complete in time. Retrying once after a short settle delay.");
+    logMessage(kBoardName, hardTimedOut
+      ? "Startup home exceeded the maximum allowed duration. Retrying once after a short settle delay."
+      : "Startup home lost progress updates for too long. Retrying once after a short settle delay.");
     broadcastStatus("Startup home retrying.");
     return;
   }
 
   startupHomeRetryCount = 0;
-  logMessage(kBoardName, "Startup home timed out. Waiting for manual Home or Reset.");
+  if (!startupHomeRecoveryResetUsed) {
+    const bool resetRequested = requestAutomaticOctopusReset(
+      kBoardName,
+      hardTimedOut
+        ? "Automatic reset after repeated startup home timeouts"
+        : "Automatic reset after repeated startup home progress loss",
+      "Startup home recovery reset"
+    );
+    if (resetRequested) {
+      startupHomeRecoveryResetUsed = true;
+      broadcastStatus("Startup home recovery reset requested.");
+      return;
+    }
+  }
+
+  logMessage(kBoardName, hardTimedOut
+    ? "Startup home exceeded the maximum allowed duration. Waiting for manual Home or Reset."
+    : "Startup home lost progress updates for too long. Waiting for manual Home or Reset.");
   broadcastStatus("Startup home stalled.");
 }
 
@@ -780,6 +961,13 @@ void runStartupLoopIfReady() {
   spiderProgramActive = true;
   spiderProgramPaused = false;
   broadcastStatus("Startup home complete. Running S1.");
+}
+
+bool startupAutomationActive() {
+  return startupHomePending
+      || startupHomeInProgress
+      || startupAutoRunPending
+      || startupAutoRunArmed;
 }
 
 void parsePositionLine(const String& line) {
@@ -883,6 +1071,7 @@ void handleOctopusLine(const String& rawLine) {
     startupHomeInProgress = false;
     startupHomeStartedMs = 0;
     startupHomeRetryCount = 0;
+    startupHomeRecoveryResetUsed = false;
     startupAutoRunArmed = true;
     startupAutoRunReadyMs = millis() + kStartupAutoplayDelayMs;
     broadcastStatus("Startup home complete. Preparing S1.");
@@ -969,6 +1158,23 @@ bool requestManualOctopusReset(const String& source) {
   octopusResetVerifyPending = true;
   octopusResetVerifyDeadlineMs = now + kManualResetVerifyTimeoutMs;
   pulseOctopusResetLine("Manual reset requested from UI");
+  return true;
+}
+
+bool requestAutomaticOctopusReset(const String& source, const String& reason, const String& statusMessage) {
+  const uint32_t now = millis();
+
+  if (lastOctopusHardwareResetMs && now - lastOctopusHardwareResetMs < kOctopusResetCooldownMs) {
+    const uint32_t secondsRemaining = (kOctopusResetCooldownMs - (now - lastOctopusHardwareResetMs) + 999) / 1000;
+    logMessage(source, reason + " blocked by Octopus reset cooldown. Wait " + String(secondsRemaining) + "s.");
+    return false;
+  }
+
+  logMessage(source, reason + ".");
+  broadcastStatus(statusMessage);
+  octopusResetVerifyPending = true;
+  octopusResetVerifyDeadlineMs = now + kManualResetVerifyTimeoutMs;
+  pulseOctopusResetLine(reason);
   return true;
 }
 
@@ -1119,9 +1325,7 @@ void handleGcodeCommand(const String& gcode, const String& source) {
     clearDesiredSpiderLoop();
 
   if (gcodeIsImmediateStop(gcode)) {
-    clearOctopusPausedState(source, "stop command");
-    forceAbortSpiderProgram(source, "stop command");
-    sendMotionStopBurst(source, "stop command");
+    issueImmediateOverride(source, "stop command");
   }
   else if (gcodeNeedsMotionStop(gcode)) {
     prepareMotionCommand(source, "terminal command", spiderStart);
@@ -1209,9 +1413,7 @@ bool handleAction(const String& action, JsonVariantConst payload, const String& 
   if (action == "stop_motion") {
     clearDesiredSpiderLoop();
     cancelStartupAutomation(source, "stop");
-    clearOctopusPausedState(source, "stop request");
-    forceAbortSpiderProgram(source, "stop request");
-    sendMotionStopBurst(source, "stop request");
+    issueImmediateOverride(source, "stop request");
     spiderProgramActive = false;
     spiderProgramPaused = false;
     broadcastStatus("Motion stopped.");
@@ -1396,16 +1598,27 @@ void handleWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 
 void setupRfInputs() {
   for (size_t i = 0; i < kButtonCount; ++i) {
-    pinMode(buttons[i].pin, INPUT_PULLUP);
+    pinMode(buttons[i].pin, INPUT);
     const bool level = digitalRead(buttons[i].pin);
     buttons[i].stableLevel = level;
     buttons[i].lastRead = level;
     buttons[i].lastChangeMs = millis();
+    attachInterrupt(digitalPinToInterrupt(buttons[i].pin), kRfInterruptHandlers[i], CHANGE);
   }
+
+  rfInputsArmed = false;
+  rfInputsArmReadyMs = millis() + kRfInputArmDelayMs;
+  dimmerPressedMs = 0;
+  lastDimmerRepeatMs = 0;
+  dimmerRepeatBlockedUntilRelease = false;
+  noInterrupts();
+  rfInterruptMask = 0;
+  interrupts();
 
   logMessage(kBoardName, "RF 8-channel input map:");
   for (size_t i = 0; i < kButtonCount; ++i)
     logMessage(kBoardName, String("  ") + buttons[i].name + " -> GPIO " + buttons[i].pin);
+  logMessage(kBoardName, String("RF inputs will arm after startup automation completes and at least ") + (kRfInputArmDelayMs / 1000.0f) + "s have passed.");
 }
 
 } // namespace
@@ -1452,7 +1665,6 @@ void loop() {
 
   readOctopusSerial();
   pollRfButtons();
-  updateDimmerHold();
   pollOctopusState();
   pollRandomCodes();
   runStartupHomeIfReady();

@@ -1,109 +1,210 @@
-ESP_Octopus
-- Board role: Wi-Fi access point, web portal, Octopus serial bridge, Marlin lamp controller
-- Wi-Fi AP SSID: ESP_Octopus
-- Wi-Fi AP password: octopus123
-- Fixed IP: 192.168.4.1
-- UART to Octopus board:
-  - ESP32 `GPIO16` (RX) -> Octopus WIFI header pin 15 -> `PD8` (`USART3_TX`, often labeled `ESP-RX` on the board docs)
-  - ESP32 `GPIO17` (TX) -> Octopus WIFI header pin 16 -> `PD9` (`USART3_RX`, often labeled `ESP-TX` on the board docs)
-  - Current Marlin mapping: ESP uses Octopus WIFI header `USART3` on `PD8` / `PD9` at `115200`
-- Octopus hardware reset line:
-  - GPIO23 -> Octopus RESET pin
-  - Drive style: open-drain, active-low pulse
-  - Wiring rule: common GND required
-- Lamp control:
-  - no local lamp PWM pin on the ESP32
-  - sends `M355` to Marlin
-  - Marlin drives the configured Octopus bed/heater output
+Current branch scope
+- This file matches the current repository tree on branch `RF`.
+- It documents the live firmware pair only:
+  - `ESP_RF_Octopus`
+  - `Marlin/marlin-2.1.2.6`
+- Older variants that existed in previous branches or layouts are intentionally not listed here.
 
-ESP_Remote
-- Board role: handheld remote with 7 push buttons, fixed-IP Wi-Fi client
-- Fixed IP: 192.168.4.2
-- Gateway / ESP_Octopus IP: 192.168.4.1
-- Buttons use INPUT_PULLUP and are active-low:
-  - GPIO13 -> Lights On
-  - GPIO14 -> Lights Off
-  - GPIO25 -> Pos1
-  - GPIO26 -> Pos2
-  - GPIO27 -> Random Position
-  - GPIO32 -> Dimmer / hold-to-change-brightness
-  - GPIO33 -> Spare / reserved
+ESP_RF_Octopus
+- Role:
+  - ESP32 access point
+  - web UI host
+  - UART bridge to Octopus / Marlin
+  - direct 8-input RF/button receiver
+- PlatformIO board:
+  - `esp32dev`
+- USB serial monitor:
+  - `115200`
+- Wi-Fi AP:
+  - SSID: `ESP_RF_Octopus`
+  - password: `octopus123`
+  - IP: `192.168.4.1`
+  - max clients: `8`
 
-ESP_NRF
-- Board role: Wi-Fi access point, web portal, Octopus serial bridge, Marlin lamp controller, NRF24 receiver
-- Wi-Fi AP SSID: ESP_NRF
-- Wi-Fi AP password: octopus123
-- Fixed IP: 192.168.4.1
-- UART to Octopus board:
-  - ESP32 `GPIO16` (RX) -> Octopus WIFI header pin 15 -> `PD8` (`USART3_TX`, often labeled `ESP-RX` on the board docs)
-  - ESP32 `GPIO17` (TX) -> Octopus WIFI header pin 16 -> `PD9` (`USART3_RX`, often labeled `ESP-TX` on the board docs)
-  - Current Marlin mapping: ESP uses Octopus WIFI header `USART3` on `PD8` / `PD9` at `115200`
-- Octopus hardware reset line:
-  - GPIO23 -> Octopus RESET pin
-  - Drive style: open-drain, active-low pulse
-  - Wiring rule: common GND required
-- Lamp control:
-  - no local lamp PWM pin on the ESP32
-  - sends `M355` to Marlin
-  - Marlin drives the configured Octopus bed/heater output
-- NRF24 wiring:
-  - GPIO33 -> CE
-  - GPIO25 -> CSN
-  - GPIO14 -> SCK
-  - GPIO19 -> MISO
-  - GPIO13 -> MOSI
-  - 3.3V -> NRF24 VCC
-  - GND -> NRF24 GND
+ESP32 <-> Octopus wiring
+- UART to Octopus:
+  - ESP32 `GPIO16` (RX2) <- Octopus `PD8`
+  - ESP32 `GPIO17` (TX2) -> Octopus `PD9`
+  - Marlin side uses `SERIAL_PORT_2 3`
+  - link baud: `115200`
+  - on the Octopus board this is the WIFI/UART header serial pair used by the ESP bridge
+- Reset line:
+  - ESP32 `GPIO23` -> Octopus `RESET`
+  - output mode: `OUTPUT_OPEN_DRAIN`
+  - active level: low
+  - reset pulse: `250 ms`
+  - common GND between ESP32 and Octopus is required
+  - do not drive the Octopus reset line high from the ESP32
 
-Arduino_Nano_NRF24 Remote_Control
-- Board role: battery-powered Nano remote with deep sleep and NRF24
-- NRF24 SPI wiring:
-  - D9 -> CE
-  - D10 -> CSN
-  - D11 -> MOSI
-  - D12 -> MISO
-  - D13 -> SCK
-- Buttons use INPUT_PULLUP and are active-low:
-  - A0 -> Lights On
-  - A1 -> Lights Off
-  - A2 -> Pos1
-  - A3 -> Pos2
-  - A4 -> Random Position
-  - A5 -> Dimmer / hold-to-change-brightness
-  - D2 -> Spare / reserved
-- Status LED:
-  - D8 -> status LED output
-  - disabled in firmware by default to reduce battery drain
+ESP32 RF/button inputs
+- All button inputs use `INPUT_PULLUP` and are active-low.
+- Mapping:
+  - `GPIO13` -> `LIGHT_ON`
+  - `GPIO14` -> `LIGHT_OFF`
+  - `GPIO25` -> `POS1`
+  - `GPIO26` -> `POS2`
+  - `GPIO27` -> `RANDOM`
+  - `GPIO32` -> `DIMMER`
+  - `GPIO33` -> `POS3`
+  - `GPIO21` -> `RESERVE`
 
-Arduino_Nano_NRF24 Octopus_Board
-- Board role: always-on Nano receiver with NRF24 and Octopus serial/reset control
-- NRF24 SPI wiring:
-  - D9 -> CE
-  - D10 -> CSN
-  - D11 -> MOSI
-  - D12 -> MISO
-  - D13 -> SCK
-- Lamp control:
-  - no local lamp PWM output on the Nano receiver
-  - sends `M355` to Marlin
-  - Marlin drives the configured Octopus bed/heater output
-- Octopus control:
-  - D0/RX <- Octopus TX
-  - D1/TX -> Octopus RX
-  - D4 -> Octopus RESET pin
-  - D5 -> status LED
+ESP32 action mapping
+- `LIGHT_ON` -> turn lamp on and start looped `M215 S1`
+- `LIGHT_OFF` -> turn lamp off and stop motion with the existing stop / abort sequence (`M108`, `M215 X`, `M410`)
+- `DIMMER` -> step `M355 P...` brightness while held
+- `POS1` -> `M215 P1`
+- `POS2` -> `M215 P2`
+- `POS3` -> `M215 P3`
+- `RANDOM` -> pick one configured random code and send `M215 S<code>`
+  - the selected `M215 S<code>` loop is restarted forever until another command clears it
+- `RESERVE` -> no action assigned yet
 
-Notes
-- The lamps are now expected to connect to the chosen Octopus bed/heater output, not to ESP32 or Nano GPIO pins.
-- Current Marlin config uses the Octopus BED output (`PA1` / bed MOSFET) for lamp control through `M355`.
-- Current Marlin serial config keeps USB host serial enabled on `SERIAL_PORT -1` and enables the ESP bridge on `SERIAL_PORT_2 3` (`PD8` / `PD9`) at `115200`.
-- The Octopus reset wire should only pull RESET low. Do not drive reset high from the ESP. The firmware uses open-drain output for this.
-- For the Nano receiver, D4 must only pull RESET low. The firmware releases RESET by switching the pin to input mode.
-- The dimmer button changes brightness in steps while held. On release, direction flips for the next hold.
-- Browser control is hosted by ESP_Octopus at http://192.168.4.1/
-- Browser control is hosted by ESP_NRF at http://192.168.4.1/ when that firmware is used instead.
-- ESP_Remote firmware now enters GPIO-wake light sleep after idle time, powers Wi-Fi down while sleeping, and reconnects when a button wakes it.
-- If a button wake happens while Wi-Fi is still reconnecting, the button action is queued and sent as soon as the link comes back.
-- For reliable ESP32 operation from 3x AAA cells, use a stable regulator and add local bulk capacitance near the ESP board. Wi-Fi current bursts are much higher than the average current.
-- NRF24 modules must be powered from 3.3V and should have a local 10uF to 47uF capacitor near the radio.
-- The Nano remote now uses aggressive 5-second idle timeout before deep sleep while keeping watchdog and fixed-packet recovery behavior.
+Lamp control
+- `ESP_RF_Octopus` does not drive a local lamp GPIO.
+- Lamp control is forwarded to Marlin with `M355`.
+- The actual lamp power output is generated on the Octopus board.
+
+Marlin / Octopus firmware
+- Marlin project:
+  - `Marlin/marlin-2.1.2.6`
+- Board:
+  - `BOARD_BTT_OCTOPUS_V1_1`
+- Machine name:
+  - `Hexapod Spider`
+- Host USB serial:
+  - `SERIAL_PORT -1`
+  - baud `250000`
+- ESP bridge serial:
+  - `SERIAL_PORT_2 3`
+  - baud `115200`
+  - board pins `PD8` / `PD9`
+
+Axis naming
+- G-code axes exposed by this config:
+  - `X Y Z A B C`
+- Internally in Marlin:
+  - `A` is axis `I`
+  - `B` is axis `J`
+  - `C` is axis `K`
+
+Octopus motor socket mapping
+- This branch uses explicit 6-axis pin assignments in `Configuration.h`.
+- Axis to motor socket mapping:
+  - `X` -> `MOTOR0`
+  - `Y` -> `MOTOR1`
+  - `Z` -> `MOTOR2`
+  - `A` / `I` -> `MOTOR3`
+  - `B` / `J` -> `MOTOR4`
+  - `C` / `K` -> `MOTOR5`
+
+Detailed stepper pins
+- `X` / `MOTOR0`
+  - STEP `PF13`
+  - DIR `PF12`
+  - EN `PF14`
+  - CS `PC4`
+- `Y` / `MOTOR1`
+  - STEP `PG0`
+  - DIR `PG1`
+  - EN `PF15`
+  - CS `PD11`
+- `Z` / `MOTOR2`
+  - STEP `PF11`
+  - DIR `PG3`
+  - EN `PG5`
+  - CS `PC6`
+- `A` / `I` / `MOTOR3`
+  - STEP `PG4`
+  - DIR `PC1`
+  - EN `PA0`
+  - CS `PC7`
+- `B` / `J` / `MOTOR4`
+  - STEP `PF9`
+  - DIR `PF10`
+  - EN `PG2`
+  - CS `PF2`
+- `C` / `K` / `MOTOR5`
+  - STEP `PC13`
+  - DIR `PF0`
+  - EN `PF1`
+  - CS `PE4`
+
+Driver types and motion defaults
+- Driver type on all 6 axes:
+  - `TMC5160`
+- RMS current on all 6 axes:
+  - `800 mA`
+- Steps per unit:
+  - `{ 1616.16, 1616.16, 1616.16, 1616.16, 1616.16, 1616.16 }`
+- Default max feedrate:
+  - `{ 200, 200, 200, 200, 200, 200 }`
+- Default max acceleration:
+  - `{ 80, 80, 80, 80, 80, 80 }`
+
+Endstop mapping
+- All active homing directions are to minimum:
+  - `X_HOME_DIR -1`
+  - `Y_HOME_DIR -1`
+  - `Z_HOME_DIR -1`
+  - `I_HOME_DIR -1`
+  - `J_HOME_DIR -1`
+  - `K_HOME_DIR -1`
+- Enabled plugs:
+  - `XMIN`
+  - `YMIN`
+  - `ZMIN`
+  - `IMIN`
+  - `JMIN`
+  - `KMIN`
+- Pin mapping:
+  - `X_MIN_PIN` -> `PG6`  -> `X-STOP`
+  - `Y_MIN_PIN` -> `PG9`  -> `Y-STOP`
+  - `Z_MIN_PIN` -> `PG10` -> `Z-STOP`
+  - `I_MIN_PIN` -> `PG11` -> `Z2-STOP`
+  - `J_MIN_PIN` -> `PG12` -> `E0DET`
+  - `K_MIN_PIN` -> `PG13` -> `E1DET`
+- Extra spare inputs still defined in the config:
+  - `U_MIN_PIN` -> `PG14` -> `E2DET`
+  - `V_MIN_PIN` -> `PG15` -> `E3DET`
+
+Lamp output on the Octopus
+- Marlin enables `CASE_LIGHT_ENABLE`.
+- `M355` drives:
+  - `CASE_LIGHT_PIN PA1`
+- On this board that is also:
+  - `HEATER_BED_PIN PA1`
+  - Octopus `BED` MOSFET output
+- Current defaults:
+  - case light default on: `true`
+  - default brightness: `179`
+- Important:
+  - this configuration repurposes the bed output for lamps
+  - there is no heated bed configured in this branch
+  - `TEMP_SENSOR_BED` is `0`
+
+Spider motion files and commands
+- Preset files:
+  - `M215 H` -> `/gcodes/home.txt`
+  - `M215 P1` -> `/gcodes/pos1.txt`
+  - `M215 P2` -> `/gcodes/pos2.txt`
+  - `M215 P3` -> `/gcodes/pos3.txt`
+- Random loop files:
+  - `M215 S1` -> `/gcodes/input.txt`
+  - `M215 S2` -> `/gcodes/input2.txt`
+  - `M215 S3` -> `/gcodes/input3.txt`
+  - `M215 S4` -> `/gcodes/input4.txt`
+  - `M215 S5` -> `/gcodes/input5.txt`
+  - `M215 S6` -> `/gcodes/input6.txt`
+  - `M215 S7` -> `/gcodes/input7.txt`
+- Runtime controls:
+  - `M215 P` -> pause active spider SD job
+  - `M215 R` -> resume paused spider SD job
+  - `M215 X` -> abort active spider SD job
+
+Current behavior notes
+- On startup the ESP firmware waits for Marlin, then runs startup homing with `M215 H`.
+- After successful startup homing it auto-starts `M215 S1`.
+- The ESP firmware expects Marlin to be the single source of truth for:
+  - lamp state through `M355`
+  - spider motion presets through `M215`
+- `Docs/pinMapping` now intentionally follows the current branch layout, not the older multi-firmware tree.

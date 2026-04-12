@@ -108,6 +108,39 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         font-size: 0.64rem;
         white-space: nowrap;
       }
+      .remote-key-row {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: 8px;
+        align-items: start;
+      }
+      .remote-key {
+        display: grid;
+        justify-items: center;
+        gap: 5px;
+      }
+      .remote-key-dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #a9a49b;
+        border: 1px solid rgba(70, 64, 54, 0.16);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.44);
+        transition: background 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+      }
+      .remote-key.active .remote-key-dot {
+        background: #5f646a;
+        box-shadow: 0 0 0 3px rgba(95,100,106,0.14);
+        transform: scale(1.05);
+      }
+      .remote-key-label {
+        color: var(--muted);
+        font-size: 0.61rem;
+        line-height: 1.1;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        text-align: center;
+      }
       .card-head, .card-subhead {
         display: flex;
         align-items: center;
@@ -392,6 +425,18 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
               </div>
             </div>
             <div class="command-block">
+              <div class="card-subhead"><h3>Remote Keys</h3><span>Live</span></div>
+              <div class="remote-key-row">
+                <div id="remoteKeyLightOn" class="remote-key"><span class="remote-key-dot"></span><span class="remote-key-label">Light+</span></div>
+                <div id="remoteKeyLightOff" class="remote-key"><span class="remote-key-dot"></span><span class="remote-key-label">Light-</span></div>
+                <div id="remoteKeyPos1" class="remote-key"><span class="remote-key-dot"></span><span class="remote-key-label">Pos1</span></div>
+                <div id="remoteKeyPos2" class="remote-key"><span class="remote-key-dot"></span><span class="remote-key-label">Pos2</span></div>
+                <div id="remoteKeyRandom" class="remote-key"><span class="remote-key-dot"></span><span class="remote-key-label">Random</span></div>
+                <div id="remoteKeyDimmer" class="remote-key"><span class="remote-key-dot"></span><span class="remote-key-label">Dim</span></div>
+                <div id="remoteKeyPos3" class="remote-key"><span class="remote-key-dot"></span><span class="remote-key-label">Pos3</span></div>
+              </div>
+            </div>
+            <div class="command-block">
               <div class="card-subhead"><h3>Speed</h3><span id="speedReadout">0</span></div>
               <input id="speedSlider" type="range" min="0" max="100" step="1" value="0" />
             </div>
@@ -416,13 +461,13 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         <div class="card">
           <div class="terminal-grid">
             <section class="terminal-block">
+              <div class="card-head"><h2>Log</h2><button id="clearLogButton" class="ghost-button" type="button">Clear Log</button></div>
+              <div id="terminalLog" class="terminal-log" aria-live="polite"></div>
+            </section>
+            <section class="terminal-block">
               <div class="card-head"><h2>Terminal</h2><button id="sendButton" type="button">Send</button></div>
               <textarea id="gcodeInput" spellcheck="false" placeholder="Type G-code, one command per line."></textarea>
               <div class="hint-list"><p><code>G1 X20</code> <code>M355 P180 S1</code> <code>M215 P3</code> <code>M215 S3</code></p></div>
-            </section>
-            <section class="terminal-block">
-              <div class="card-head"><h2>Log</h2><button id="clearLogButton" class="ghost-button" type="button">Clear Log</button></div>
-              <div id="terminalLog" class="terminal-log" aria-live="polite"></div>
             </section>
           </div>
         </div>
@@ -443,7 +488,16 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         positions: { X: 0, Y: 0, Z: 0, A: 0, B: 0, C: 0 },
         feed: 200,
         lightOn: false,
-        brightness: 0
+        brightness: 0,
+        remoteButtons: {
+          lightOn: false,
+          lightOff: false,
+          pos1: false,
+          pos2: false,
+          random: false,
+          dimmer: false,
+          pos3: false
+        }
       };
       const legDefinitions = AXES.map((axis, index) => ({ axis, angle: -90 + index * 60, label: `L${index + 1} ${axis}` }));
       const els = {
@@ -459,6 +513,13 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         randomButton: document.getElementById("randomButton"),
         stopButton: document.getElementById("stopButton"),
         resetOctopusButton: document.getElementById("resetOctopusButton"),
+        remoteKeyLightOn: document.getElementById("remoteKeyLightOn"),
+        remoteKeyLightOff: document.getElementById("remoteKeyLightOff"),
+        remoteKeyPos1: document.getElementById("remoteKeyPos1"),
+        remoteKeyPos2: document.getElementById("remoteKeyPos2"),
+        remoteKeyRandom: document.getElementById("remoteKeyRandom"),
+        remoteKeyDimmer: document.getElementById("remoteKeyDimmer"),
+        remoteKeyPos3: document.getElementById("remoteKeyPos3"),
         speedSlider: document.getElementById("speedSlider"),
         speedReadout: document.getElementById("speedReadout"),
         lampSwitch: document.getElementById("lampSwitch"),
@@ -488,6 +549,16 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
       function setPill(pill, statusEl, active, text) {
         pill.classList.toggle("off", !active);
         statusEl.textContent = text;
+      }
+      function syncRemoteButtons(buttons) {
+        state.remoteButtons = Object.assign({}, state.remoteButtons, buttons || {});
+        els.remoteKeyLightOn.classList.toggle("active", !!state.remoteButtons.lightOn);
+        els.remoteKeyLightOff.classList.toggle("active", !!state.remoteButtons.lightOff);
+        els.remoteKeyPos1.classList.toggle("active", !!state.remoteButtons.pos1);
+        els.remoteKeyPos2.classList.toggle("active", !!state.remoteButtons.pos2);
+        els.remoteKeyRandom.classList.toggle("active", !!state.remoteButtons.random);
+        els.remoteKeyDimmer.classList.toggle("active", !!state.remoteButtons.dimmer);
+        els.remoteKeyPos3.classList.toggle("active", !!state.remoteButtons.pos3);
       }
       function send(obj) {
         if (state.socket && state.socket.readyState === WebSocket.OPEN) {
@@ -542,6 +613,7 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         setPill(els.remotePill, els.remoteStatus, !!data.remoteOnline, data.remoteOnline ? "On" : "Idle");
         if (data.feed !== undefined) syncSpeed(data.feed);
         if (data.lights) syncLamp(data.lights.on, data.lights.brightness);
+        if (data.remoteButtons) syncRemoteButtons(data.remoteButtons);
         if (Array.isArray(data.randomCodes)) state.randomCodes = data.randomCodes.slice();
         if (data.positions) {
           AXES.forEach((axis) => {
