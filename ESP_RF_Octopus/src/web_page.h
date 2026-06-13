@@ -479,7 +479,7 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
       const FEED_MAX = 400;
       const BRIGHTNESS_MAX = 255;
       const UI_MAX = 100;
-      const AXIS_MAX = 119;
+      const AXIS_MAX = 115;
       const AXES = ["X", "Y", "Z", "A", "B", "C"];
       const state = {
         socket: null,

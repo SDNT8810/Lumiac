@@ -1,6 +1,6 @@
 const MOTOR_COUNT = 6;
 const MIN_ANGLE = 0;
-const MAX_ANGLE = 119;
+const MAX_ANGLE = 115;
 const LEG_AXES = ["X", "Y", "Z", "A", "B", "C"];
 const DEFAULT_POSE = [20, 20, 20, 20, 20, 20];
 const SIM_FEED_REFERENCE = 200;
