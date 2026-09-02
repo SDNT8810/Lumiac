@@ -1,0 +1,2 @@
+# PlatformIO builds both the ESP32 and BTT Octopus firmware projects.
+platformio==6.1.19

@@ -133,20 +133,22 @@ Driver types and motion defaults
 - Driver type on all 6 axes:
   - `TMC5160`
 - RMS current on all 6 axes:
-  - `800 mA`
+  - `2500 mA`
 - Steps per unit:
-  - `{ 538.72, 538.72, 538.72, 538.72, 538.72, 538.72 }`
-  - 1:3 gearbox compensation: one motor turn makes the arm turn 3 times.
+  - `{ 533.33, 533.33, 533.33, 533.33, 533.33, 533.33 }`
+  - Calibrated for the 3:1 gearing.
 - Default max feedrate:
-  - `{ 200, 200, 200, 200, 200, 200 }`
+  - `{ 260, 260, 260, 260, 260, 260 }`
 - Default max acceleration:
   - `{ 80, 80, 80, 80, 80, 80 }`
 - Default normal acceleration:
   - `25`
 - Homing feedrate:
-  - `{ 200, 200, 200, 200, 200, 200 }`
+  - `{ 400, 400, 400, 400, 400, 400 }`
+- TMC chopper mode:
+  - SpreadCycle on all 6 axes with the 24V timing profile.
 - Software max position:
-  - `115` on all six motion axes
+  - `120` on all six motion axes
 
 Endstop mapping
 - All active homing directions are to minimum:

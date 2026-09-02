@@ -29,7 +29,7 @@ constexpr bool kOctopusResetActiveLow = true;
 constexpr uint32_t kOctopusResetPulseMs = 250;
 constexpr int kMinFeedRate = 10;
 constexpr int kMaxFeedRate = 400;
-constexpr int kMaxAxisPosition = 115;
+constexpr int kMaxAxisPosition = 120;
 
 constexpr uint8_t kLightOnPin = 14;
 constexpr uint8_t kLightOffPin = 32;
@@ -927,7 +927,7 @@ void handleRfButtonPressed(const ButtonIndex index) {
       stepDimmer(kRemoteBoardName, "RF DIMMER");
       return;
     case kButtonPos3:
-      moveAllLegsToPosition(kRemoteBoardName, "RF P3", 115);
+      moveAllLegsToPosition(kRemoteBoardName, "RF P3", 120);
       return;
     case kButtonReserve:
       logMessage(kRemoteBoardName, "RESERVE button pressed. No action assigned.");
