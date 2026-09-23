@@ -1220,7 +1220,17 @@
  * Override with M92
  *                                      X, Y, Z [, I [, J [, K...]]], E0 [, E1[, E2...]]
  */
-#define DEFAULT_AXIS_STEPS_PER_UNIT   { 533.33, 533.33, 533.33, 533.33, 533.33, 533.33 } // Calibrated for the 3:1 gearing
+// One setting for all six TMC drivers AND their distance calibration.
+// Compare 2 / 8 / 16 / 32 / 64 only after resolving overheating. See Docs/driver-tuning.md.
+// Keep the measured 533.33 steps/mm at 16 microsteps as the reference.
+#ifndef SPIDER_MICROSTEPS
+  #define SPIDER_MICROSTEPS 16
+#endif
+#if SPIDER_MICROSTEPS != 2 && SPIDER_MICROSTEPS != 8 && SPIDER_MICROSTEPS != 16 && SPIDER_MICROSTEPS != 32 && SPIDER_MICROSTEPS != 64
+  #error "SPIDER_MICROSTEPS must be 2, 8, 16, 32, or 64."
+#endif
+#define SPIDER_AXIS_STEPS_PER_UNIT (533.33f * SPIDER_MICROSTEPS / 16.0f)
+#define DEFAULT_AXIS_STEPS_PER_UNIT { SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT }
 
 /**
  * Default Max Feed Rate (linear=mm/s, rotational=°/s)

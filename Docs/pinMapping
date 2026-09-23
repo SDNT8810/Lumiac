@@ -7,12 +7,16 @@ Current branch scope
 
 ESP_RF_Octopus
 - Role:
-  - ESP32 access point
+  - ESP32 or ESP-12S access point (alternative controllers)
   - web UI host
   - UART bridge to Octopus / Marlin
   - direct 8-input RF/button receiver
 - PlatformIO board:
-  - `esp32dev`
+  - `esp32dev` for ESP32
+  - `esp12e` in environment `esp12s` for ESP-12S / ESP8266
+- ESP-12S replacement wiring and upload procedure:
+  - See `Docs/esp-controllers.md` and `ESP_RF_Octopus/src/board_config.h`.
+  - The ESP32 pin numbers below do not apply to ESP-12S.
 - USB serial monitor:
   - `115200`
 - Wi-Fi AP:
@@ -37,15 +41,15 @@ ESP32 <-> Octopus wiring
   - do not drive the Octopus reset line high from the ESP32
 
 ESP32 RF/button inputs
-- All button inputs use `INPUT_PULLUP` and are active-low.
+- All button inputs use `INPUT` and are active-high, with a defined LOW idle level.
 - Mapping:
-  - `GPIO13` -> `LIGHT_ON`
-  - `GPIO14` -> `LIGHT_OFF`
+  - `GPIO14` -> `LIGHT_ON`
+  - `GPIO32` -> `LIGHT_OFF`
   - `GPIO25` -> `POS1`
-  - `GPIO26` -> `POS2`
-  - `GPIO27` -> `RANDOM`
-  - `GPIO32` -> `DIMMER`
-  - `GPIO33` -> `POS3`
+  - `GPIO33` -> `POS2`
+  - `GPIO26` -> `RANDOM`
+  - `GPIO13` -> `DIMMER`
+  - `GPIO27` -> `POS3`
   - `GPIO21` -> `RESERVE`
 
 ESP32 action mapping

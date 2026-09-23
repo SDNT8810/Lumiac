@@ -1,16 +1,23 @@
 #include <Arduino.h>
-#include <WiFi.h>
-#include <WebServer.h>
+#if defined(ESP8266)
+  #include <ESP8266WiFi.h>
+  #include <ESP8266WebServer.h>
+#else
+  #include <WiFi.h>
+  #include <WebServer.h>
+#endif
 #include <WebSocketsServer.h>
 #include <DNSServer.h>
 #include <ArduinoJson.h>
 
 #include "web_page.h"
 #include "logo_jpg.h"
+#include "board_config.h"
 
 namespace {
 
-constexpr char kBoardName[] = "ESP_RF_Octopus";
+using namespace board;
+constexpr const char* kBoardName = board::kName;
 constexpr char kRemoteBoardName[] = "RF Remote";
 
 constexpr char kApSsid[] = "ESP_RF_Octopus";
@@ -19,26 +26,13 @@ constexpr byte kDnsPort = 53;
 const IPAddress kApIp(192, 168, 4, 1);
 const IPAddress kApGateway(192, 168, 4, 1);
 const IPAddress kApSubnet(255, 255, 255, 0);
-constexpr uint8_t kApMaxConnections = 8;
-
-constexpr int kOctopusTxPin = 17;
-constexpr int kOctopusRxPin = 16;
 constexpr uint32_t kOctopusBaud = 115200;
-constexpr int kOctopusResetPin = 23;
 constexpr bool kOctopusResetActiveLow = true;
 constexpr uint32_t kOctopusResetPulseMs = 250;
 constexpr int kMinFeedRate = 10;
 constexpr int kMaxFeedRate = 400;
 constexpr int kMaxAxisPosition = 120;
 
-constexpr uint8_t kLightOnPin = 14;
-constexpr uint8_t kLightOffPin = 32;
-constexpr uint8_t kPos1Pin = 25;
-constexpr uint8_t kPos2Pin = 33;
-constexpr uint8_t kRandomPin = 26;
-constexpr uint8_t kDimmerPin = 13;
-constexpr uint8_t kPos3Pin = 27;
-constexpr uint8_t kReservePin = 21;
 constexpr bool kRfButtonsActiveLow = false;
 
 constexpr uint32_t kStatePollMs = 1500;
@@ -50,7 +44,6 @@ constexpr uint32_t kOctopusSerialReinitMs = 30000;
 constexpr uint32_t kOctopusHardwareResetTimeoutMs = 120000;
 constexpr uint32_t kOctopusResetCooldownMs = 180000;
 constexpr uint32_t kHealthCheckMs = 60000;
-constexpr uint32_t kLowHeapThresholdBytes = 30000;
 constexpr uint8_t kLowHeapStrikeLimit = 3;
 constexpr uint32_t kDebounceMs = 8;
 constexpr uint8_t kDimmerStep = 16;
@@ -78,8 +71,6 @@ constexpr uint32_t kManualResetVerifyTimeoutMs = 15000;
 constexpr uint32_t kRfInputArmDelayMs = 3000;
 constexpr size_t kSerialLineMax = 256;
 constexpr size_t kMaxRandomCodes = 16;
-constexpr size_t kLogHistorySize = 120;
-constexpr size_t kLogReplayLimit = 30;
 
 constexpr char kAxes[] = { 'X', 'Y', 'Z', 'A', 'B', 'C' };
 constexpr size_t kAxisCount = sizeof(kAxes) / sizeof(kAxes[0]);
@@ -116,9 +107,14 @@ struct ButtonState {
 };
 
 DNSServer dnsServer;
+#if defined(ESP8266)
+ESP8266WebServer server(80);
+HardwareSerial& octopusSerial = Serial; // UART0 is reserved for Marlin, never debug logs.
+#else
 WebServer server(80);
-WebSocketsServer webSocket(81);
 HardwareSerial octopusSerial(2);
+#endif
+WebSocketsServer webSocket(81);
 
 float axisPositions[kAxisCount] = { 0, 0, 0, 0, 0, 0 };
 uint16_t randomCodes[kMaxRandomCodes] = {};
@@ -209,6 +205,7 @@ void syncLampStateToOctopus(const String& source);
 void probeStartupHomeProgress();
 void sendSpiderHomeCommand(const String& source, const bool logTx = true, const bool emitCompletionMarker = false);
 
+#if defined(ESP32)
 void IRAM_ATTR onRfLightOnChange() { rfInterruptMask |= (1UL << kButtonLightOn); }
 void IRAM_ATTR onRfLightOffChange() { rfInterruptMask |= (1UL << kButtonLightOff); }
 void IRAM_ATTR onRfPos1Change() { rfInterruptMask |= (1UL << kButtonPos1); }
@@ -229,6 +226,19 @@ constexpr ButtonInterruptHandler kRfInterruptHandlers[kButtonCount] = {
   onRfPos3Change,
   onRfReserveChange
 };
+#endif
+
+void beginOctopusSerial() {
+#if defined(ESP8266)
+  octopusSerial.setRxBufferSize(1024);
+  octopusSerial.begin(kOctopusBaud);
+  octopusSerial.setDebugOutput(false);
+  // Terminate any partial line left by the ESP8266 ROM's boot output.
+  octopusSerial.print('\n');
+#else
+  octopusSerial.begin(kOctopusBaud, SERIAL_8N1, kOctopusRxPin, kOctopusTxPin);
+#endif
+}
 
 void initStringStorage() {
   serialLine.reserve(kSerialLineMax);
@@ -329,7 +339,9 @@ void broadcastLogPayload(const String& line) {
 
 void logMessage(const String& source, const String& message) {
   const String line = formatLogLine(source, message);
+#if defined(ESP32)
   Serial.println(line);
+#endif
   appendLogHistory(line);
   broadcastLogPayload(line);
 }
@@ -954,6 +966,7 @@ void pollRfButtons() {
   if (!rfInputsArmed) {
     for (size_t i = 0; i < kButtonCount; ++i) {
       ButtonState& button = buttons[i];
+      if (button.pin == kUnusedPin) continue;
       const bool level = digitalRead(button.pin);
       button.stableLevel = level;
       button.lastRead = level;
@@ -982,7 +995,14 @@ void pollRfButtons() {
 
   for (size_t i = 0; i < kButtonCount; ++i) {
     ButtonState& button = buttons[i];
-    if (interruptMask & (1UL << i)) {
+    if (button.pin == kUnusedPin) continue;
+#if defined(ESP8266)
+    // ESP8266 GPIO16 cannot trigger interrupts. Poll all seven inputs instead.
+    const bool sampleInput = true;
+#else
+    const bool sampleInput = interruptMask & (1UL << i);
+#endif
+    if (sampleInput) {
       const bool level = digitalRead(button.pin);
       if (level != button.lastRead) {
         button.lastRead = level;
@@ -1287,7 +1307,7 @@ void pulseOctopusResetLine(const String& reason) {
 
   octopusSerial.end();
   delay(50);
-  octopusSerial.begin(kOctopusBaud, SERIAL_8N1, kOctopusRxPin, kOctopusTxPin);
+  beginOctopusSerial();
 }
 
 bool requestManualOctopusReset(const String& source) {
@@ -1348,10 +1368,10 @@ void recoverOctopusLink() {
   if (now - lastOctopusSerialReinitMs < kOctopusSerialReinitMs) return;
 
   lastOctopusSerialReinitMs = now;
-  logMessage(kBoardName, "Octopus serial RX timeout persisted. Reinitializing UART2.");
+  logMessage(kBoardName, "Octopus serial RX timeout persisted. Reinitializing Octopus UART.");
   octopusSerial.end();
   delay(20);
-  octopusSerial.begin(kOctopusBaud, SERIAL_8N1, kOctopusRxPin, kOctopusTxPin);
+  beginOctopusSerial();
   sendToOctopus("M115", kBoardName, false);
 
   if (now - lastOctopusRxMs < kOctopusHardwareResetTimeoutMs) return;
@@ -1722,50 +1742,29 @@ void setupWebSocket() {
   webSocket.onEvent(handleWsEvent);
 }
 
-void handleWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
-  (void)info;
-
-#if defined(ARDUINO_EVENT_WIFI_AP_STACONNECTED)
-  if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED) {
-    ++connectedStationCount;
-    logMessage(kBoardName, String("Wi-Fi client connected. Total stations=") + connectedStationCount);
-    return;
-  }
-#endif
-
-#if defined(ARDUINO_EVENT_WIFI_AP_STADISCONNECTED)
-  if (event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) {
-    if (connectedStationCount > 0) --connectedStationCount;
-    logMessage(kBoardName, String("Wi-Fi client disconnected. Total stations=") + connectedStationCount);
-    return;
-  }
-#endif
-
-#if defined(SYSTEM_EVENT_AP_STACONNECTED)
-  if (event == SYSTEM_EVENT_AP_STACONNECTED) {
-    ++connectedStationCount;
-    logMessage(kBoardName, String("Wi-Fi client connected. Total stations=") + connectedStationCount);
-    return;
-  }
-#endif
-
-#if defined(SYSTEM_EVENT_AP_STADISCONNECTED)
-  if (event == SYSTEM_EVENT_AP_STADISCONNECTED) {
-    if (connectedStationCount > 0) --connectedStationCount;
-    logMessage(kBoardName, String("Wi-Fi client disconnected. Total stations=") + connectedStationCount);
-    return;
-  }
-#endif
+void pollWiFiStations() {
+  // Keep networking/log allocation in loop(), using an API shared by both cores.
+  static uint32_t lastPollMs = 0;
+  const uint32_t now = millis();
+  if (now - lastPollMs < 1000) return;
+  lastPollMs = now;
+  const uint8_t count = WiFi.softAPgetStationNum();
+  if (count == connectedStationCount) return;
+  connectedStationCount = count;
+  logMessage(kBoardName, String("Wi-Fi clients connected: ") + count);
 }
 
 void setupRfInputs() {
   for (size_t i = 0; i < kButtonCount; ++i) {
+    if (buttons[i].pin == kUnusedPin) continue;
     pinMode(buttons[i].pin, INPUT);
     const bool level = digitalRead(buttons[i].pin);
     buttons[i].stableLevel = level;
     buttons[i].lastRead = level;
     buttons[i].lastChangeMs = millis();
+#if defined(ESP32)
     attachInterrupt(digitalPinToInterrupt(buttons[i].pin), kRfInterruptHandlers[i], CHANGE);
+#endif
   }
 
   rfInputsArmed = false;
@@ -1777,28 +1776,37 @@ void setupRfInputs() {
   rfInterruptMask = 0;
   interrupts();
 
-  logMessage(kBoardName, "RF 8-channel input map:");
-  for (size_t i = 0; i < kButtonCount; ++i)
-    logMessage(kBoardName, String("  ") + buttons[i].name + " -> GPIO " + buttons[i].pin);
+  logMessage(kBoardName, "RF input map:");
+  for (size_t i = 0; i < kButtonCount; ++i) {
+    if (buttons[i].pin != kUnusedPin)
+      logMessage(kBoardName, String("  ") + buttons[i].name + " -> GPIO " + buttons[i].pin);
+  }
   logMessage(kBoardName, String("RF inputs will arm after startup automation completes and at least ") + (kRfInputArmDelayMs / 1000.0f) + "s have passed.");
 }
 
 } // namespace
 
 void setup() {
+#if defined(ESP32)
   Serial.begin(115200);
+#endif
   initStringStorage();
   randomSeed(micros());
 
-  pinMode(kOctopusResetPin, OUTPUT_OPEN_DRAIN);
   digitalWrite(kOctopusResetPin, kOctopusResetActiveLow ? HIGH : LOW);
+  pinMode(kOctopusResetPin, OUTPUT_OPEN_DRAIN);
   setupRfInputs();
 
-  octopusSerial.begin(kOctopusBaud, SERIAL_8N1, kOctopusRxPin, kOctopusTxPin);
+  beginOctopusSerial();
 
-  WiFi.onEvent(handleWiFiEvent);
+#if defined(ESP8266)
+  WiFi.persistent(false);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
+  WiFi.hostname(kBoardName);
+#else
   WiFi.setSleep(false);
   WiFi.setHostname(kBoardName);
+#endif
   WiFi.mode(WIFI_AP);
   WiFi.softAPdisconnect(true);
   delay(50);
@@ -1824,6 +1832,7 @@ void loop() {
   dnsServer.processNextRequest();
   server.handleClient();
   webSocket.loop();
+  pollWiFiStations();
 
   readOctopusSerial();
   pollRfButtons();
@@ -1856,4 +1865,5 @@ void loop() {
     logMessage(kBoardName, "Remote heartbeat timed out.");
     broadcastState();
   }
+  yield();
 }
