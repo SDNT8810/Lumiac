@@ -13,7 +13,7 @@ python build.pt eps32 COM4
 
 These commands build and then upload to the specified port. The normal spellings `python build.py esp12 COM5` and `python build.py esp32 COM4` work too. `esp12s` is another alias for `esp12`. Use the port belonging to the ESP programmer, not the Octopus USB port.
 
-For build-only operation, omit the port or add `--build-only`. Neither ESP target accesses an Octopus SD card. `python build.py` still builds Marlin and copies its firmware to the configured SD path when available; `python build.py marlin --build-only` skips that copy.
+For build-only operation, omit the port or add `--build-only`. Each ESP build embeds the current `gcodes/input*.txt` and `gcodes/pos*.txt` files in firmware. Rebuild and upload the chosen ESP after changing these files. There is no separate filesystem upload, and neither ESP target accesses an Octopus SD card. `python build.py` still builds Marlin and copies its firmware to the configured SD path when available; `python build.py marlin --build-only` skips that copy. Once the Octopus has flashed `firmware.bin` and renamed it `FIRMWARE.CUR`, power off and remove its SD card.
 
 | Target | PlatformIO environment | Binary |
 | --- | --- | --- |
@@ -67,6 +67,10 @@ GPIO0 is reserved for the programmer/BOOT button. GPIO6-11 are flash connections
 A bare ESP-12S has no native USB. COM5 must be the USB-to-UART programmer or a carrier that includes one. Supplying a COM port to the build helper cannot replace the physical bootloader wiring.
 
 The two controller profiles keep SSID `ESP_RF_Octopus`, password `octopus123`, and `http://192.168.4.1/`. Run only the chosen controller. Existing startup behavior is preserved: it homes the robot and starts loop S1 automatically. Arrange the first powered hardware test accordingly, with the driver cooling issue resolved and the mechanism supported.
+
+Dashboard, RF, and ESP-terminal `M215 S1`–`S7` and `M215 P1`–`P3` select programs in ESP flash. The ESP sends the commands over the existing 115200-baud UART link and waits for an Octopus acknowledgement between commands. `M215 P`, `M215 R`, and `M215 X` pause, resume, and stop this ESP stream. Homing uses direct `G28`; `home.txt` is retained as a source reference. Direct `M215` commands sent to the Octopus USB port still use Marlin's legacy SD-card implementation and require the card.
+
+The random programs run forward, then backward, returning to the exact starting position before `@LOOP` repeats. The ESP logs `Looping ESP flash program` at each restart. Startup and ESP-initiated homing have a five-minute limit; Marlin can remain silent while `G28` blocks, so the ESP does not queue periodic position probes during homing.
 
 ## Diagnostics and limitations
 

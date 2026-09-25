@@ -1,13 +1,13 @@
 # Driver cooling, torque, and noise
 
-## Requested 64-microstep / 3 A test build
+## 256-microstep builds and full-stroke motion
 
 The `marlin-max` target prepares the requested higher-current profile. It is separate from the normal build because drivers have already been measured at 95-110 C: do not operate this higher-current profile with the unresolved cooling condition. It also requires motors rated for the selected phase current. The commercial module revision and motor nameplate ratings have not been physically verified.
 
 | Setting | Normal `marlin` | Test `marlin-max` |
 | --- | --- | --- |
-| Commanded microsteps | 16 | 64 |
-| Steps/mm, all six axes | 533.33 | 2133.32 |
+| Commanded microsteps | 256 | 256 |
+| Steps/mm, all six axes | 8533.28 | 8533.28 |
 | Run current, all six axes | 2500 mA RMS | 3000 mA RMS |
 | Homing current | 2500 mA RMS | 2500 mA RMS |
 | Nominal holding current after a run | About 1250 mA RMS | About 1250 mA RMS |
@@ -15,13 +15,13 @@ The `marlin-max` target prepares the requested higher-current profile. It is sep
 | Interpolation | To 256 | To 256 |
 | Thermal warnings/current reduction/error stop | Enabled | Enabled |
 
-Holding current is quantized by the driver; the test profile uses a 0.416666667 hold multiplier to avoid increasing idle heating along with run current. That multiplier also scales holding current during a temporary homing-current setting. Motion coordinates, acceleration, SD trajectories, supply voltage, and dashboard speed control are unchanged. Steps/mm scales with the selected microsteps, so a doubled microstep setting does not halve physical travel.
+Holding current is quantized by the driver; the test profile uses a 0.416666667 hold multiplier to avoid increasing idle heating along with run current. That multiplier also scales holding current during a temporary homing-current setting. Steps/mm scales with the selected microsteps, so changing microsteps does not change physical travel. Both builds now command 256 microsteps; the max profile differs in current.
 
 BTT rates the TMC5160T Pro at **3.1 A RMS / 4.4 A peak**, and lists a **3 A maximum for the module base connection**. The test build therefore requests 3.0 A RMS, not 3.3 A. This is a hardware-based test ceiling, not a validated safe continuous current for the current assembly. See [BTT's specification](https://global.bttwiki.com/TMC5160T%20Pro%20V1.0.html).
 
 Compared with 2.5 A, 3.0 A represents 20% more phase current and about **44% more resistive heating** at the same resistance. Torque will not necessarily rise proportionally near motor saturation. Reducing speed from the dashboard can improve torque margin but does not reduce the configured phase current; it cannot substitute for cooling.
 
-64 microsteps is a smoothness comparison, not a torque multiplier. Because both profiles already interpolate to 256, the audible improvement may be small. Two commanded microsteps are also supported for experiments, but are not selected in this build; coarse stepping without interpolation tends to increase vibration. See [Analog Devices on microstepping](https://www.analog.com/en/resources/analog-dialogue/articles/mastering-precision-understanding-microstepping.html).
+256 commanded microsteps is the maximum supported here, not a torque multiplier. The old 64-microstep setting already interpolated to 256 internally, so an audible improvement is uncertain. The new setting sends four times as many step pulses for the same motion; verify smooth operation at the intended speed. See [Analog Devices on microstepping](https://www.analog.com/en/resources/analog-dialogue/articles/mastering-precision-understanding-microstepping.html).
 
 Build only, without copying to SD or flashing:
 
@@ -31,7 +31,7 @@ python build.pt marlin-max --build-only
 
 Output: `Marlin/marlin-2.1.2.6/.pio/build/STM32F446ZE_btt_max_power/firmware.bin`. This is **Octopus/Marlin firmware**, not ESP-12S firmware. The ESP does not need reflashing for this profile. After resolving cooling and checking motor compatibility, use the normal SD-card flashing procedure and re-home. The existing ESP startup homing/autoplay still applies.
 
-`python build.py marlin-max` builds and copies the test binary to the configured SD path if present, using the same copy behavior as `python build.py`. To return to the normal 16-microstep / 2.5 A firmware, build `python build.py marlin --build-only` and flash its separate `STM32F446ZE_btt/firmware.bin`.
+`python build.py marlin-max` builds and copies the test binary to the configured SD path if present, using the same copy behavior as `python build.py`. To return to the normal 256-microstep / 2.5 A firmware, build `python build.py marlin --build-only` and flash its separate `STM32F446ZE_btt/firmware.bin`.
 
 The build flags are in `Marlin/marlin-2.1.2.6/ini/lumiac.ini`. Compile-time guards reject configured run or homing current above 3000 mA; this is not a runtime clamp on manually entered M906 commands. No thermal protection is disabled, and program starts do not reapply high current over thermal current reductions.
 
@@ -80,7 +80,7 @@ The normal `marlin` build configures the following; the separate test profile is
 | Run / homing current | 2500 mA RMS on every axis |
 | Hold current multiplier | 0.5 (nominally about 1250 mA RMS) |
 | Current sense resistor | 0.075 ohm on every axis; verify against the actual module |
-| Microsteps | 16, with interpolation to 256 |
+| Microsteps | 256; interpolation enabled |
 | Chopper | SpreadCycle, 24 V timing; automatic hybrid switching disabled |
 | Thermal monitoring | Enabled; persistent overtemperature warnings reduce current in 50 mA steps |
 | Motion profile via M215 | Per-axis acceleration cap 50 mm/s2; travel acceleration 15 mm/s2 |
@@ -110,37 +110,39 @@ A 1000 W supply is a capacity rating, not the power forced into the motors. Supp
 
 There is no separate random-mode current, microstep, or chopper setting in this source. POS1/POS2 and random launches all apply the same M215 acceleration profile.
 
-The active loop in every current `gcodes/input*.txt` file has 36 arc-length-spaced points. The arms follow related but non-identical smooth waves, using different secondary curves to create an organic motion. Arc-length spacing keeps the combined six-axis path speed steady while preserving the less symmetrical character of the original random movement. Each pose file has one straight coordinated move and then stops. Continuous random operation also keeps run current active instead of settling to reduced hold current.
+The active loop in every current `gcodes/input*.txt` file has 239 moves: 120 along the original irregular route and 119 retracing it to the start. The trajectory spans the full 0–120 mm on each axis. The ESP handles `@LOOP` locally and logs each restart. Each pose file has one straight coordinated move and then stops. Continuous random operation also keeps run current active instead of settling to reduced hold current.
 
 There is also a speed difference in the ESP32 path:
 
-- The UI defaults to 200 with a maximum of 400. For an SD job, the bridge sends `G1 F400` and `M220 S50` at that default.
-- Pose files contain no F command, so their requested coordinated feed is effectively 200 mm/min.
-- Every random file explicitly sets `F200`, so its requested coordinated feed becomes 100 mm/min at the same UI setting.
+- The UI defaults to 50 (305 mm/min) with a maximum of 600 mm/min. For an ESP-streamed program, the bridge sends `G1 F600` and `M220 S51` at that default.
+- Pose files contain no F command, so their requested coordinated feed is effectively 306 mm/min at that default (600 × 51%).
+- Every random file explicitly sets `F338`, so its requested coordinated feed becomes about 172 mm/min at that default (338 × 51%). This is 30% above the previous programmed `F260` before the dashboard override.
 
-These are path feedrates, not the speed of every arm; acceleration and segment geometry also affect each axis. The slower random speed may sit in a resonance band. This is a candidate explanation, not a measured diagnosis. Compare the same motion at the same actual feedrate before blaming microsteps. The software change leaves existing program speeds and trajectories intact.
+These are path feedrates, not the speed of every arm; acceleration and segment geometry also affect each axis. The Marlin per-axis limit is 390 mm/s (up from 260 mm/s), while homing now uses 320 mm/min on each axis (20% below the former 400 mm/min). The second endstop approach also slows from 200 to 160 mm/min because the existing bump divisor remains 2. The random path is longer because it uses the full stroke, so its total loop time may not fall even with a higher programmed feedrate.
 
 ## Quiet random-motion G-code
 
-All seven current random files (`gcodes/input*.txt`) now begin with `M204 P8 T8`. It overrides the launcher's 15 mm/s² acceleration for random movement only, reducing acceleration to 8 mm/s². The active portion of each file is the same 36-point organic dance, using a fixed `F200` feedrate; all points are arc-length spaced. `@LOOP` returns to its first point, so earlier trajectory variants below that directive are retained in the source file but do not execute. Copy the updated `gcodes` directory to the Octopus SD card; no firmware rebuild is needed for this G-code-only change.
+All seven current random files (`gcodes/input*.txt`) begin with `M204 P8 T8`. It overrides the launcher's 15 mm/s² acceleration for random movement only, reducing acceleration to 8 mm/s². The original struggling trajectory is preserved, scaled independently on each axis to 0–120 mm, then retraced back to its starting position before repeating. It uses a fixed `F338` feedrate, 30% above the previous `F260`. Rebuild and upload the ESP-12S or ESP32 firmware after editing these files; the Octopus SD card is not needed for normal operation.
 
 ## Microstep comparisons
 
-**Start with 16 microsteps, interpolation on, and SpreadCycle.** This is already the configured baseline for loaded motion. Try 8 next and 32 only as a comparison. Lower subdivision increases the torque associated with a single small commanded increment; it does not multiply the motor's available running torque. Full/half stepping can introduce more vibration and noise. Microstepping helps smoothness even when positioning precision is unimportant. See [Analog Devices on microstepping and running torque](https://www.analog.com/en/resources/analog-dialogue/articles/mastering-precision-understanding-microstepping.html).
+**The current builds use 256 microsteps and SpreadCycle.** Lower subdivision increases the torque associated with a single small commanded increment; it does not multiply the motor's available running torque. Full/half stepping can introduce more vibration and noise. Microstepping helps smoothness even when positioning precision is unimportant. See [Analog Devices on microstepping and running torque](https://www.analog.com/en/resources/analog-dialogue/articles/mastering-precision-understanding-microstepping.html).
 
 All supported microstep settings retain 256-step interpolation, so audible differences may be small. There is no guaranteed microstep setting that simultaneously maximizes torque and minimizes noise.
 
 A 0.5 mm position tolerance does not make stalling acceptable: this system has no position feedback to correct missed steps, so their error can accumulate far beyond that tolerance.
 
-For a microstep-only comparison in the normal build, set **only `SPIDER_MICROSTEPS`** in `Marlin/marlin-2.1.2.6/Marlin/Configuration.h`, then rebuild. It sets all six TMC microstep values and scales all six steps/mm together. The `marlin-max` environment overrides this macro to 64 via its build flags:
+For a microstep-only comparison in the normal build, set **only `SPIDER_MICROSTEPS`** in `Marlin/marlin-2.1.2.6/Marlin/Configuration.h`, then rebuild. It sets all six TMC microstep values and scales all six steps/mm together. The `marlin-max` environment overrides this macro to 256 via its build flags:
 
 | SPIDER_MICROSTEPS | Steps/mm | Purpose |
 | --- | --- | --- |
-| 16 | 533.33 | Existing baseline and recommended starting point |
+| 16 | 533.33 | Earlier baseline |
 | 2 | 66.66625 | Coarse-command experiment; no promised torque gain or noise reduction |
 | 8 | 266.665 | Lower pulse-rate comparison; no promised torque gain |
 | 32 | 1066.66 | Finer-command comparison; no promised noise reduction |
-| 64 | 2133.32 | Selected test profile; finest practical external command setting |
+| 64 | 2133.32 | Earlier test profile |
+| 128 | 4266.64 | Optional comparison |
+| 256 | 8533.28 | Current setting in both builds |
 
 The calibration comes from the existing 533.33 steps/mm value, not a new measurement of the gearing. The same G-code coordinates retain the same intended physical travel. Do not halve microsteps without halving steps/mm: that would double travel, speed, and acceleration in physical units. Do not change the generic `MICROSTEP_MODES` array or use `M350` for these SPI TMC drivers; this tree's M350 operates hardware MS pins, not the TMC SPI microstep registers.
 
@@ -157,7 +159,7 @@ The root `build.py` also copies firmware to a detected SD card, so use the comma
 1. Support the mechanism, ensure every driver has airflow, and establish a current within the confirmed motor/module ratings. Do not reduce holding current with a suspended load unsupported.
 2. Prevent the ESP32 startup automation from homing and starting random motion during setup. For a direct Octopus USB bench test, disconnect the ESP32 control connection with power off. Merely closing the web page does not stop the automation.
 3. Read and save the baseline with the commands below. All six drivers must communicate correctly. Investigate `All HIGH` / `All LOW`, thermal warnings, or shorts before moving.
-4. Once the rig is ready for motion, home it, compare the same short motion and the same feedrate in each profile, and then run one pass of the same random file. Direct `M23 /gcodes/input.txt` followed by `M24` starts an ordinary one-pass SD job; `M215 S1` starts an indefinite loop. For that direct SD comparison, first set `M201 X50 Y50 Z50 A50 B50 C50`, `M204 P15 T15`, and a fixed `M220` percentage: M23/M24 do not apply the M215 motion profile. Re-home after any stall or skipped movement.
+4. Once the rig is ready for motion, home it, compare the same short motion and the same feedrate in each profile, and then run the ESP's `M215 S1` loop. For a direct Octopus USB bench comparison without the ESP, paste a short section of `gcodes/input.txt` as ordinary G-code; Octopus USB `M215` and `M23`/`M24` require an SD card. Re-home after any stall or skipped movement.
 5. Record current, microsteps, chopper mode, speed override, temperature at the same location, noise, and missed movement. Stop for renewed abnormal heating, thermal warnings, loss of torque, or rough/stalled motion. A short successful move does not establish a safe continuous temperature; check the intended duty cycle after short trials pass.
 
 Read-only diagnostics:

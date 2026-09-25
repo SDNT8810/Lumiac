@@ -13,6 +13,7 @@
 #include "web_page.h"
 #include "logo_jpg.h"
 #include "board_config.h"
+#include "embedded_gcodes.h"
 
 namespace {
 
@@ -30,7 +31,7 @@ constexpr uint32_t kOctopusBaud = 115200;
 constexpr bool kOctopusResetActiveLow = true;
 constexpr uint32_t kOctopusResetPulseMs = 250;
 constexpr int kMinFeedRate = 10;
-constexpr int kMaxFeedRate = 400;
+constexpr int kMaxFeedRate = 600;
 constexpr int kMaxAxisPosition = 120;
 
 constexpr bool kRfButtonsActiveLow = false;
@@ -53,12 +54,9 @@ constexpr uint32_t kDimmerHoldSafetyMs = 1500;
 constexpr uint32_t kStartupHomeDelayMs = 8000;
 constexpr uint32_t kResetHomeDelayMs = 1200;
 constexpr uint32_t kStartupAutoplayDelayMs = 500;
-constexpr uint32_t kStartupHomeTimeoutMs = 180000;
-// Standard G28 homing can stay silent while a leg is blocking in its homing routine.
-// Leave enough margin before treating startup home as stalled.
-constexpr uint32_t kStartupHomeProgressTimeoutMs = 45000;
-constexpr uint32_t kStartupHomeProbeMs = 8000;
-constexpr uint32_t kStartupHomeMotionTimeoutMs = 18000;
+// G28 can remain silent for the full move from POS3. Apply one five-minute limit
+// instead of declaring a healthy blocking home stalled after 18 or 45 seconds.
+constexpr uint32_t kStartupHomeTimeoutMs = 300000;
 constexpr uint32_t kStartupHomeRetryDelayMs = 2500;
 constexpr uint32_t kStartupHomeRetryBackoffMs = 2500;
 constexpr uint8_t kStartupHomeRetryLimit = 4;
@@ -68,6 +66,7 @@ constexpr uint32_t kWebSocketHeartbeatMs = 10000;
 constexpr uint32_t kWebSocketPongTimeoutMs = 3000;
 constexpr uint8_t kWebSocketDisconnectCount = 2;
 constexpr uint32_t kManualResetVerifyTimeoutMs = 15000;
+constexpr uint32_t kEmbeddedMarkerTimeoutMs = 300000;
 constexpr uint32_t kRfInputArmDelayMs = 3000;
 constexpr size_t kSerialLineMax = 256;
 constexpr size_t kMaxRandomCodes = 16;
@@ -119,7 +118,6 @@ WebSocketsServer webSocket(81);
 float axisPositions[kAxisCount] = { 0, 0, 0, 0, 0, 0 };
 uint16_t randomCodes[kMaxRandomCodes] = {};
 size_t randomCodeCount = 0;
-bool waitingForRandomCodeList = false;
 ButtonState buttons[kButtonCount] = {
   { "LIGHT_ON", kLightOnPin },
   { "LIGHT_OFF", kLightOffPin },
@@ -137,7 +135,20 @@ bool octopusFirmwareReady = false;
 bool remoteOnline = false;
 bool spiderProgramActive = false;
 bool spiderProgramPaused = false;
-int currentFeedRate = 200;
+bool octopusHomed = false;
+struct EmbeddedPlayback {
+  const embedded_gcodes::Program* program = nullptr;
+  size_t offset = 0;
+  bool waitingForHome = false;
+  bool waitingForMarker = false;
+  bool skipFirstMove = false;
+  uint32_t homeStartedMs = 0;
+  uint32_t markerSentMs = 0;
+  String marker;
+};
+EmbeddedPlayback embeddedPlayback;
+uint32_t embeddedMarkerSerial = 0;
+int currentFeedRate = 305; // 50 on the 0-100 dashboard scale (10-600 mm/min).
 int8_t dimmerDirection = 1;
 bool startupHomePending = true;
 bool startupHomeInProgress = false;
@@ -160,8 +171,6 @@ uint32_t lastRemoteActivityMs = 0;
 uint32_t lastHealthCheckMs = 0;
 uint32_t startupHomeReadyMs = 0;
 uint32_t startupHomeStartedMs = 0;
-uint32_t startupHomeLastProbeMs = 0;
-uint32_t startupHomeLastMotionMs = 0;
 uint32_t startupAutoRunReadyMs = 0;
 uint32_t spiderLoopRestartReadyMs = 0;
 uint32_t spiderControlEchoIgnoreUntilMs = 0;
@@ -170,7 +179,6 @@ uint32_t rfInputsArmReadyMs = 0;
 uint8_t lowHeapStrikeCount = 0;
 uint8_t connectedStationCount = 0;
 uint8_t startupHomeRetryCount = 0;
-bool startupHomeSawMotion = false;
 
 String serialLine;
 String remoteIpString = "RF 8CH";
@@ -183,9 +191,11 @@ volatile uint32_t rfInterruptMask = 0;
 uint32_t dimmerPressedMs = 0;
 uint32_t lastDimmerRepeatMs = 0;
 bool dimmerRepeatBlockedUntilRelease = false;
-float startupHomeLastPositions[kAxisCount] = { 0, 0, 0, 0, 0, 0 };
 
 void sendToOctopus(const String& line, const String& source = kBoardName, const bool logTx = true);
+bool handleEmbeddedM215(const String& line, const String& source);
+void pumpEmbeddedProgram();
+void stopEmbeddedProgram();
 bool pauseSpiderProgramForAdjustment(const String& source, const String& reason);
 void resumeSpiderProgramAfterAdjustment(const String& source, const String& reason);
 void cancelStartupAutomation(const String& source, const char* reason);
@@ -202,8 +212,7 @@ bool requestAutomaticOctopusReset(const String& source, const String& reason, co
 void markOctopusFirmwareReady();
 void syncMotionSpeedToOctopus(const String& source, const bool spiderJob);
 void syncLampStateToOctopus(const String& source);
-void probeStartupHomeProgress();
-void sendSpiderHomeCommand(const String& source, const bool logTx = true, const bool emitCompletionMarker = false);
+void sendSpiderHomeCommand(const String& source, const bool logTx = true, const bool emitCompletionMarker = true);
 
 #if defined(ESP32)
 void IRAM_ATTR onRfLightOnChange() { rfInterruptMask |= (1UL << kButtonLightOn); }
@@ -445,6 +454,10 @@ void sendStateResponse() {
 void sendToOctopus(const String& line, const String& source, const bool logTx) {
   if (line.isEmpty()) return;
 
+  // M215 remains the UI/RF command vocabulary. Its programs now live in ESP
+  // flash, so never forward M215 to Marlin's SD-card implementation.
+  if (handleEmbeddedM215(line, source)) return;
+
   if (logTx)
     logMessage(source, String("TX -> Octopus: ") + line);
   octopusSerial.print(line);
@@ -534,30 +547,174 @@ void parseLampStateLine(const String& line) {
   setLightState(true, static_cast<uint8_t>(reportedBrightness), "Octopus", "Lamp state report", false);
 }
 
-void resetRandomCodes() {
-  randomCodeCount = 0;
-  waitingForRandomCodeList = true;
+void queryRandomCodes(const String& source) {
+  (void)source;
+  lastRandomCodeQueryMs = millis();
+  static_assert(sizeof(embedded_gcodes::randomPrograms) / sizeof(embedded_gcodes::randomPrograms[0]) <= kMaxRandomCodes, "Too many embedded random programs");
+  randomCodeCount = sizeof(embedded_gcodes::randomPrograms) / sizeof(embedded_gcodes::randomPrograms[0]);
+  for (size_t i = 0; i < randomCodeCount; ++i)
+    randomCodes[i] = static_cast<uint16_t>(i + 1);
   broadcastState();
 }
 
-void addRandomCode(const uint16_t code) {
-  for (size_t i = 0; i < randomCodeCount; ++i) {
-    if (randomCodes[i] == code) return;
-  }
+void stopEmbeddedProgram() {
+  embeddedPlayback.program = nullptr;
+  embeddedPlayback.offset = 0;
+  embeddedPlayback.waitingForHome = false;
+  embeddedPlayback.waitingForMarker = false;
+  embeddedPlayback.skipFirstMove = false;
+  embeddedPlayback.homeStartedMs = 0;
+  embeddedPlayback.marker = "";
+  spiderProgramActive = false;
+  spiderProgramPaused = false;
+}
 
-  if (randomCodeCount >= kMaxRandomCodes) {
-    logMessage(kBoardName, "Random code cache full. Increase kMaxRandomCodes if more M215 S codes are needed.");
+void startEmbeddedProgram(const embedded_gcodes::Program& program, const String& source) {
+  stopEmbeddedProgram();
+  embeddedPlayback.program = &program;
+  embeddedPlayback.waitingForHome = !octopusHomed;
+  embeddedPlayback.homeStartedMs = millis();
+  spiderProgramActive = true;
+
+  // Match the acceleration limits formerly applied by Marlin's SD launcher.
+  sendToOctopus("M201 X50 Y50 Z50 A50 B50 C50", source, false);
+  sendToOctopus("M204 P15 T15", source, false);
+  if (embeddedPlayback.waitingForHome)
+    sendSpiderHomeCommand(source, false, true);
+
+  logMessage(source, String("Running ESP flash program: ") + program.name);
+  broadcastState();
+}
+
+bool handleEmbeddedM215(const String& line, const String& source) {
+  String command = line;
+  command.trim();
+  command.toUpperCase();
+  if (command != "M215" && !command.startsWith("M215 ")) return false;
+
+  if (command == "M215 X") {
+    stopEmbeddedProgram();
+    broadcastState();
+    return true;
+  }
+  if (command == "M215 P") {
+    if (embeddedPlayback.program) {
+      spiderProgramPaused = true;
+      broadcastState();
+    }
+    return true;
+  }
+  if (command == "M215 R") {
+    if (embeddedPlayback.program) {
+      spiderProgramPaused = false;
+      broadcastState();
+    }
+    return true;
+  }
+  if (command == "M215" || command == "M215 L") {
+    queryRandomCodes(source);
+    logMessage(source, "M215 programs are embedded in ESP flash: S1-S7, P1-P3; H homes, P pauses, R resumes, X stops.");
+    return true;
+  }
+  if (command == "M215 H") {
+    stopEmbeddedProgram();
+    octopusHomed = false;
+    sendSpiderHomeCommand(source, true, true);
+    return true;
+  }
+  if (command.startsWith("M215 P") && command.length() == 7) {
+    const int preset = command[6] - '1';
+    if (preset >= 0 && preset < 3) {
+      startEmbeddedProgram(embedded_gcodes::presetPrograms[preset], source);
+      return true;
+    }
+  }
+  if (command.startsWith("M215 S")) {
+    const int code = command.substring(6).toInt();
+    if (code >= 1 && code <= static_cast<int>(sizeof(embedded_gcodes::randomPrograms) / sizeof(embedded_gcodes::randomPrograms[0]))) {
+      startEmbeddedProgram(embedded_gcodes::randomPrograms[code - 1], source);
+      return true;
+    }
+  }
+  logMessage(source, String("Unknown ESP flash program command: ") + line);
+  return true;
+}
+
+bool nextEmbeddedCommand(String& command) {
+  command = "";
+  while (embeddedPlayback.program) {
+    const char value = static_cast<char>(pgm_read_byte(embeddedPlayback.program->text + embeddedPlayback.offset));
+    if (!value) {
+      if (!embeddedPlayback.program->loop) return false;
+      embeddedPlayback.offset = 0;
+      embeddedPlayback.skipFirstMove = true;
+      continue;
+    }
+    ++embeddedPlayback.offset;
+    if (value != '\n') {
+      if (value != '\r' && command.length() < 95) command += value;
+      continue;
+    }
+    const int comment = command.indexOf(';');
+    if (comment >= 0) command.remove(comment);
+    command.trim();
+    if (command == "@LOOP") {
+      logMessage(kBoardName, String("Looping ESP flash program: ") + embeddedPlayback.program->name);
+      embeddedPlayback.offset = 0;
+      embeddedPlayback.skipFirstMove = true;
+      command = "";
+      continue;
+    }
+    if (embeddedPlayback.skipFirstMove && command.startsWith("G1 ")) {
+      embeddedPlayback.skipFirstMove = false;
+      command = "";
+      continue;
+    }
+    if (command.length()) return true;
+  }
+  return false;
+}
+
+void pumpEmbeddedProgram() {
+  if (!embeddedPlayback.program) return;
+  if (embeddedPlayback.waitingForHome) {
+    if (millis() - embeddedPlayback.homeStartedMs < kStartupHomeTimeoutMs) return;
+    logMessage(kBoardName, "ESP G-code stream timed out waiting for homing; stopping motion.");
+    clearDesiredSpiderLoop();
+    stopEmbeddedProgram();
+    sendToOctopus("M410", kBoardName, false);
+    broadcastStatus("G-code stream stopped: homing did not complete.");
+    broadcastState();
+    return;
+  }
+  if (spiderProgramPaused || !octopusFirmwareReady) return;
+
+  if (embeddedPlayback.waitingForMarker) {
+    if (millis() - embeddedPlayback.markerSentMs < kEmbeddedMarkerTimeoutMs) return;
+    logMessage(kBoardName, "ESP G-code stream lost its Octopus acknowledgement; stopping motion.");
+    clearDesiredSpiderLoop();
+    stopEmbeddedProgram();
+    sendToOctopus("M410", kBoardName, false);
+    broadcastStatus("G-code stream stopped: Octopus did not acknowledge a command.");
+    broadcastState();
     return;
   }
 
-  randomCodes[randomCodeCount++] = code;
-  broadcastState();
-}
+  String command;
+  command.reserve(96);
+  if (!nextEmbeddedCommand(command)) {
+    const String name = embeddedPlayback.program->name;
+    stopEmbeddedProgram();
+    logMessage(kBoardName, String("ESP flash program finished: ") + name);
+    broadcastState();
+    return;
+  }
 
-void queryRandomCodes(const String& source) {
-  lastRandomCodeQueryMs = millis();
-  resetRandomCodes();
-  sendToOctopus("M215", source);
+  embeddedPlayback.marker = "LUMIAC_ACK_" + String(++embeddedMarkerSerial);
+  embeddedPlayback.waitingForMarker = true;
+  embeddedPlayback.markerSentMs = millis();
+  sendToOctopus(command, kBoardName, false);
+  sendToOctopus("M118 " + embeddedPlayback.marker, kBoardName, false);
 }
 
 bool canQueryRandomCodesNow() {
@@ -576,29 +733,6 @@ bool octopusWatchdogSuspended() {
   return startupAutomationActive()
       || spiderProgramActive
       || spiderProgramPaused;
-}
-
-void beginStartupHomeTracking(const uint32_t now) {
-  startupHomeLastProbeMs = now;
-  startupHomeLastMotionMs = now;
-  startupHomeSawMotion = false;
-  for (size_t i = 0; i < kAxisCount; ++i)
-    startupHomeLastPositions[i] = axisPositions[i];
-}
-
-void noteStartupHomeMotion(const uint32_t now) {
-  if (!startupHomeInProgress) return;
-
-  bool moved = false;
-  for (size_t i = 0; i < kAxisCount; ++i) {
-    if (fabsf(axisPositions[i] - startupHomeLastPositions[i]) < 0.5f) continue;
-    startupHomeLastPositions[i] = axisPositions[i];
-    moved = true;
-  }
-
-  if (!moved) return;
-  startupHomeSawMotion = true;
-  startupHomeLastMotionMs = now;
 }
 
 void scheduleStartupHomeRetry(const uint32_t now, const String& reason) {
@@ -682,6 +816,7 @@ bool gcodeNeedsMotionStop(const String& rawGcode) {
   const String gcode = normalizedGcode(rawGcode);
   if (!gcode.length()) return false;
 
+  if (gcode == "M215" || gcode == "M215 L" || gcode == "M215 P" || gcode == "M215 R") return false;
   if (gcode.startsWith("M410")) return false;
   if (gcode.startsWith("M114")) return false;
   if (gcode.startsWith("M115")) return false;
@@ -1056,12 +1191,7 @@ void updateDimmerHold(const uint32_t now) {
 }
 
 void runRandomPosition(const String& source) {
-  if (!randomCodeCount) {
-    logMessage(source, "Random position requested before M215 code list was available. Requesting M215 list.");
-    broadcastStatus("Random position unavailable yet. Querying M215 list.");
-    queryRandomCodes(source);
-    return;
-  }
+  if (!randomCodeCount) queryRandomCodes(source);
 
   const uint16_t code = randomCodes[random(static_cast<long>(randomCodeCount))];
   prepareMotionCommand(source, "random position", true);
@@ -1084,7 +1214,6 @@ void runStartupHomeIfReady() {
   startupHomePending = false;
   startupHomeInProgress = true;
   startupHomeStartedMs = now;
-  beginStartupHomeTracking(now);
   broadcastStatus("Running startup home.");
   // Startup home runs after a clean firmware boot or explicit reset, so avoid sending
   // extra stop / abort commands right before the blocking homing routine.
@@ -1092,36 +1221,19 @@ void runStartupHomeIfReady() {
   sendSpiderHomeCommand(kBoardName, true, true);
 }
 
-void probeStartupHomeProgress() {
-  if (!startupHomeInProgress) return;
-
-  const uint32_t now = millis();
-  if (now - startupHomeLastProbeMs < kStartupHomeProbeMs) return;
-
-  startupHomeLastProbeMs = now;
-  sendToOctopus("M114", kBoardName, false);
-}
-
 void recoverStartupHomeIfStalled() {
   if (!startupHomeInProgress) return;
   if (!startupHomeStartedMs) return;
 
   const uint32_t now = millis();
-  const bool hardTimedOut = now - startupHomeStartedMs >= kStartupHomeTimeoutMs;
-  const bool serialStalled = now - lastOctopusRxMs >= kStartupHomeProgressTimeoutMs;
-  const bool motionStalled = startupHomeSawMotion && now - startupHomeLastMotionMs >= kStartupHomeMotionTimeoutMs;
-  if (!hardTimedOut && !serialStalled && !motionStalled) return;
+  if (now - startupHomeStartedMs < kStartupHomeTimeoutMs) return;
 
   startupHomeInProgress = false;
   startupHomeStartedMs = 0;
   issueImmediateOverride(kBoardName, "startup home recovery");
   scheduleStartupHomeRetry(
     now,
-    hardTimedOut
-      ? "Startup home exceeded the maximum allowed duration."
-      : motionStalled
-        ? "Startup home stopped moving."
-        : "Startup home lost serial progress updates for too long."
+    "Startup home exceeded the five-minute limit."
   );
 }
 
@@ -1174,40 +1286,21 @@ void parsePositionLine(const String& line) {
   if (found) {
     octopusOnline = true;
     lastOctopusRxMs = millis();
-    noteStartupHomeMotion(lastOctopusRxMs);
     broadcastState();
   }
-}
-
-void parseRandomCodeLine(const String& line) {
-  if (line == "Spider SD file codes:") {
-    resetRandomCodes();
-    return;
-  }
-
-  const int marker = line.indexOf("M215 S");
-  if (marker < 0) {
-    if (waitingForRandomCodeList && line.startsWith("ok")) {
-      waitingForRandomCodeList = false;
-      broadcastState();
-    }
-    return;
-  }
-
-  int valueStart = marker + 6;
-  int valueEnd = valueStart;
-  while (valueEnd < line.length() && isDigit(line[valueEnd]))
-    ++valueEnd;
-
-  if (valueEnd <= valueStart) return;
-
-  addRandomCode(static_cast<uint16_t>(line.substring(valueStart, valueEnd).toInt()));
 }
 
 void handleOctopusLine(const String& rawLine) {
   String line = rawLine;
   line.trim();
   if (!line.length()) return;
+  const String markerLine = line.startsWith("echo:") ? line.substring(5) : line;
+  if (markerLine.startsWith("LUMIAC_ACK_")) {
+    lastOctopusRxMs = millis();
+    if (embeddedPlayback.waitingForMarker && markerLine == embeddedPlayback.marker)
+      embeddedPlayback.waitingForMarker = false;
+    return;
+  }
   const bool spiderRunLine = line.startsWith("Running spider ") && line.indexOf(':') >= 0;
   const bool spiderLoopLine = line.startsWith("Looping spider SD file:");
   const bool explicitFirmwareReadyLine = line.startsWith("FIRMWARE_NAME:") || line.startsWith("Cap:");
@@ -1218,7 +1311,13 @@ void handleOctopusLine(const String& rawLine) {
   lastOctopusRxMs = millis();
   parseLampStateLine(line);
   parsePositionLine(line);
-  parseRandomCodeLine(line);
+  if (embeddedPlayback.program && (line.startsWith("Error:") || line.startsWith("Resend:"))) {
+    clearDesiredSpiderLoop();
+    stopEmbeddedProgram();
+    sendToOctopus("M410", kBoardName, false);
+    broadcastStatus("G-code stream stopped after an Octopus command error.");
+    broadcastState();
+  }
 
   if (!octopusFirmwareReady && octopusLineSuggestsFirmwareReady(line)) {
     if (!explicitFirmwareReadyLine)
@@ -1256,10 +1355,14 @@ void handleOctopusLine(const String& rawLine) {
       spiderPauseForAdjustment = false;
   }
 
+  if (line == "Spider homing complete." || line == "Spider grouped homing complete.") {
+    octopusHomed = true;
+    embeddedPlayback.waitingForHome = false;
+  }
+
   if ((line == "Spider homing complete." || line == "Spider grouped homing complete.") && startupHomeInProgress && startupAutoRunPending) {
     startupHomeInProgress = false;
     startupHomeStartedMs = 0;
-    startupHomeLastMotionMs = 0;
     startupHomeRetryCount = 0;
     startupHomeRecoveryResetUsed = false;
     startupAutoRunArmed = true;
@@ -1291,9 +1394,8 @@ void pulseOctopusResetLine(const String& reason) {
 
   octopusOnline = false;
   octopusFirmwareReady = false;
-  spiderProgramActive = false;
-  spiderProgramPaused = false;
-  waitingForRandomCodeList = false;
+  octopusHomed = false;
+  stopEmbeddedProgram();
   serialLine = "";
   broadcastState();
 
@@ -1513,7 +1615,14 @@ void handleGcodeCommand(const String& gcode, const String& source) {
     prepareMotionCommand(source, "terminal command", spiderStart);
   }
 
-  sendToOctopus(outgoing, source);
+  if (outgoingNormalized == kSpiderHomeCommand) {
+    octopusHomed = false;
+    sendSpiderHomeCommand(source);
+  }
+  else {
+    if (outgoingNormalized.startsWith("G28")) octopusHomed = false;
+    sendToOctopus(outgoing, source);
+  }
 
   if (spiderStart) {
     spiderProgramActive = true;
@@ -1550,6 +1659,7 @@ bool handleAction(const String& action, JsonVariantConst payload, const String& 
     clearDesiredSpiderLoop();
     cancelStartupAutomation(source, "home");
     prepareMotionCommand(source, "home");
+    octopusHomed = false;
     sendSpiderHomeCommand(source);
     spiderProgramActive = false;
     spiderProgramPaused = false;
@@ -1835,11 +1945,11 @@ void loop() {
   pollWiFiStations();
 
   readOctopusSerial();
+  pumpEmbeddedProgram();
   pollRfButtons();
   pollOctopusState();
   pollRandomCodes();
   runStartupHomeIfReady();
-  probeStartupHomeProgress();
   recoverStartupHomeIfStalled();
   runStartupLoopIfReady();
   runSpiderLoopRestartIfReady();

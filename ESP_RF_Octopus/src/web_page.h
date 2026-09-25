@@ -437,8 +437,8 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
               </div>
             </div>
             <div class="command-block">
-              <div class="card-subhead"><h3>Speed</h3><span id="speedReadout">0</span></div>
-              <input id="speedSlider" type="range" min="0" max="100" step="1" value="0" />
+              <div class="card-subhead"><h3>Speed</h3><span id="speedReadout">50</span></div>
+              <input id="speedSlider" type="range" min="0" max="100" step="1" value="50" />
             </div>
             <div class="command-block">
               <div class="card-subhead"><h3>Lamp</h3><span id="lampReadout">OFF 0</span></div>
@@ -476,17 +476,17 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
 
     <script>
       const FEED_MIN = 10;
-      const FEED_MAX = 400;
+      const FEED_MAX = 600;
       const BRIGHTNESS_MAX = 255;
       const UI_MAX = 100;
-      const AXIS_MAX = 115;
+      const AXIS_MAX = 120;
       const AXES = ["X", "Y", "Z", "A", "B", "C"];
       const state = {
         socket: null,
         reconnectTimer: 0,
         randomCodes: [],
         positions: { X: 0, Y: 0, Z: 0, A: 0, B: 0, C: 0 },
-        feed: 200,
+        feed: 305,
         lightOn: false,
         brightness: 0,
         remoteButtons: {

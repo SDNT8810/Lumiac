@@ -21,7 +21,7 @@ PROJECT_DIR_CANDIDATES = (
     ROOT / "webapp" / "marlin-2.1.2.6",
     ROOT / "WebApp" / "marlin-2.1.2.6",
 )
-SD_ROOT = Path(os.environ.get("OCTOPUS_SD_ROOT", r"E:\\"))
+SD_ROOT = Path(os.environ.get("OCTOPUS_SD_ROOT", r"I:\\"))
 
 
 def resolve_project_dir() -> Path:
@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
             firmware_src = project_dir / ".pio" / "build" / environment / "firmware.bin"
             print(f"Building {target} ({environment}) from {project_dir}...", flush=True)
             if target == "marlin-max":
-                print("Test profile: 3.0 A RMS run current, 64 microsteps. Requires effective driver cooling and compatible motor ratings.", flush=True)
+                print("Test profile: 3.0 A RMS run current, 256 microsteps. Requires effective driver cooling and compatible motor ratings.", flush=True)
             run_build(project_dir, environment)
             if not args.build_only:
                 # Check the build artifact before removing the previous SD marker.

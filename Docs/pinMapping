@@ -139,16 +139,16 @@ Driver types and motion defaults
 - RMS current on all 6 axes:
   - `2500 mA`
 - Steps per unit:
-  - `{ 533.33, 533.33, 533.33, 533.33, 533.33, 533.33 }`
+  - `{ 8533.28, 8533.28, 8533.28, 8533.28, 8533.28, 8533.28 }` at 256 microsteps
   - Calibrated for the 3:1 gearing.
 - Default max feedrate:
-  - `{ 260, 260, 260, 260, 260, 260 }`
+  - `{ 390, 390, 390, 390, 390, 390 }` mm/s
 - Default max acceleration:
   - `{ 80, 80, 80, 80, 80, 80 }`
 - Default normal acceleration:
   - `25`
 - Homing feedrate:
-  - `{ 400, 400, 400, 400, 400, 400 }`
+  - `{ 320, 320, 320, 320, 320, 320 }` mm/min
 - TMC chopper mode:
   - SpreadCycle on all 6 axes with the 24V timing profile.
 - Software max position:
@@ -195,9 +195,9 @@ Lamp output on the Octopus
   - there is no heated bed configured in this branch
   - `TEMP_SENSOR_BED` is `0`
 
-Spider motion files and commands
+Spider motion files and commands (ESP flash, when commanded through the ESP)
 - Preset files:
-  - `M215 H` -> `/gcodes/home.txt`
+  - `M215 H` -> direct `G28 X Y Z A B C` homing
   - `M215 P1` -> `/gcodes/pos1.txt`
   - `M215 P2` -> `/gcodes/pos2.txt`
   - `M215 P3` -> `/gcodes/pos3.txt`
@@ -210,14 +210,12 @@ Spider motion files and commands
   - `M215 S6` -> `/gcodes/input6.txt`
   - `M215 S7` -> `/gcodes/input7.txt`
 - Runtime controls:
-  - `M215 P` -> pause active spider SD job
-  - `M215 R` -> resume paused spider SD job
-  - `M215 X` -> abort active spider SD job
+  - `M215 P` -> pause the ESP G-code stream
+  - `M215 R` -> resume the ESP G-code stream
+  - `M215 X` -> stop the ESP G-code stream
 
 Current behavior notes
 - On startup the ESP firmware waits for Marlin, then runs startup homing with `M215 H`.
 - After successful startup homing it auto-starts `M215 S1`.
-- The ESP firmware expects Marlin to be the single source of truth for:
-  - lamp state through `M355`
-  - spider motion presets through `M215`
+- Marlin controls lamp state through `M355`; the ESP stores motion programs and sends ordinary G-code to Marlin. Direct `M215` commands on the Octopus USB port still use the legacy SD-card implementation.
 - `Docs/pinMapping` now intentionally follows the current branch layout, not the older multi-firmware tree.

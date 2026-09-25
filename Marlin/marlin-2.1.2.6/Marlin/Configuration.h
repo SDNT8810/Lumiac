@@ -1221,13 +1221,13 @@
  *                                      X, Y, Z [, I [, J [, K...]]], E0 [, E1[, E2...]]
  */
 // One setting for all six TMC drivers AND their distance calibration.
-// Compare 2 / 8 / 16 / 32 / 64 only after resolving overheating. See Docs/driver-tuning.md.
+// Compare 2 / 8 / 16 / 32 / 64 / 128 / 256 only after resolving overheating. See Docs/driver-tuning.md.
 // Keep the measured 533.33 steps/mm at 16 microsteps as the reference.
 #ifndef SPIDER_MICROSTEPS
-  #define SPIDER_MICROSTEPS 16
+  #define SPIDER_MICROSTEPS 256
 #endif
-#if SPIDER_MICROSTEPS != 2 && SPIDER_MICROSTEPS != 8 && SPIDER_MICROSTEPS != 16 && SPIDER_MICROSTEPS != 32 && SPIDER_MICROSTEPS != 64
-  #error "SPIDER_MICROSTEPS must be 2, 8, 16, 32, or 64."
+#if SPIDER_MICROSTEPS != 2 && SPIDER_MICROSTEPS != 8 && SPIDER_MICROSTEPS != 16 && SPIDER_MICROSTEPS != 32 && SPIDER_MICROSTEPS != 64 && SPIDER_MICROSTEPS != 128 && SPIDER_MICROSTEPS != 256
+  #error "SPIDER_MICROSTEPS must be 2, 8, 16, 32, 64, 128, or 256."
 #endif
 #define SPIDER_AXIS_STEPS_PER_UNIT (533.33f * SPIDER_MICROSTEPS / 16.0f)
 #define DEFAULT_AXIS_STEPS_PER_UNIT { SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT }
@@ -1237,7 +1237,7 @@
  * Override with M203
  *                                      X, Y, Z [, I [, J [, K...]]], E0 [, E1[, E2...]]
  */
-#define DEFAULT_MAX_FEEDRATE          { 260, 260, 260, 260, 260, 260 } // 30% faster on all six arms
+#define DEFAULT_MAX_FEEDRATE          { 390, 390, 390, 390, 390, 390 } // mm/s; 50% above the previous 260 mm/s limit
 
 //#define LIMITED_MAX_FR_EDITING        // Limit edit via M203 or LCD to DEFAULT_MAX_FEEDRATE * 2
 #if ENABLED(LIMITED_MAX_FR_EDITING)
@@ -2160,7 +2160,7 @@
 #endif
 
 // Homing speeds (linear=mm/min, rotational=°/min)
-#define HOMING_FEEDRATE_MM_M { 400, 400, 400, 400, 400, 400 }
+#define HOMING_FEEDRATE_MM_M { 320, 320, 320, 320, 320, 320 }
 
 // Validate that endstops are triggered on homing moves
 #define VALIDATE_HOMING_ENDSTOPS
