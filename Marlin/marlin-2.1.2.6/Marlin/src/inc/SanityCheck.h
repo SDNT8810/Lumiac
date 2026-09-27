@@ -1544,6 +1544,19 @@ static_assert(COUNT(arm) == LOGICAL_AXES, "AXIS_RELATIVE_MODES must contain " _L
 /**
  * Homing checks
  */
+#if ENABLED(SPIDER_CONCURRENT_HOMING)
+  #if NUM_AXES != 6 || !IS_CARTESIAN || IS_CORE || ANY(MARKFORGED_XY, MARKFORGED_YX, FOAMCUTTER_XYUV)
+    #error "SPIDER_CONCURRENT_HOMING requires six independent Cartesian motor axes."
+  #elif HAS_BED_PROBE || HAS_EXTRA_ENDSTOPS || HAS_X2_STEPPER || HAS_Y2_STEPPER || NUM_Z_STEPPERS > 1 || ANY(SENSORLESS_HOMING, DIRECT_STEPPING, INPUT_SHAPING_X, INPUT_SHAPING_Y, DUAL_X_CARRIAGE)
+    #error "SPIDER_CONCURRENT_HOMING requires one motor and one physical endstop per axis, without input shaping."
+  #elif !ALL(USE_X_MIN, USE_Y_MIN, USE_Z_MIN, USE_I_MIN, USE_J_MIN, USE_K_MIN)
+    #error "SPIDER_CONCURRENT_HOMING requires all six MIN endstop pins."
+  #elif X_HOME_DIR != -1 || Y_HOME_DIR != -1 || Z_HOME_DIR != -1 || I_HOME_DIR != -1 || J_HOME_DIR != -1 || K_HOME_DIR != -1
+    #error "SPIDER_CONCURRENT_HOMING requires all six axes to home toward MIN."
+  #endif
+  static_assert(SPIDER_HOME_RELEASE_MM > 0, "SPIDER_HOME_RELEASE_MM must be positive.");
+#endif
+
 #ifndef HOMING_BUMP_MM
   #error "Required setting HOMING_BUMP_MM is missing!"
 #elif !defined(HOMING_BUMP_DIVISOR)

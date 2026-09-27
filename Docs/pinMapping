@@ -148,7 +148,12 @@ Driver types and motion defaults
 - Default normal acceleration:
   - `25`
 - Homing feedrate:
-  - `{ 320, 320, 320, 320, 320, 320 }` mm/min
+  - `{ 160, 160, 160, 160, 160, 160 }` mm/min
+- Full homing (`G28` / `G28 X Y Z A B C`):
+  - All six arms start one continuous approach together; each stops at its own MIN switch.
+  - No segmented approach or second bump. Initially pressed switches get a 2 mm release move first.
+  - A failed release or missing switch fails homing; all six must trigger before coordinates become trusted.
+  - Individual-axis homing commands retain their normal 2 mm bump / slower second approach.
 - TMC chopper mode:
   - SpreadCycle on all 6 axes with the 24V timing profile.
 - Software max position:

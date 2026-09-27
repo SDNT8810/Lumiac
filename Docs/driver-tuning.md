@@ -118,7 +118,7 @@ There is also a speed difference in the ESP32 path:
 - Pose files contain no F command, so their requested coordinated feed is effectively 306 mm/min at that default (600 × 51%).
 - Every random file explicitly sets `F338`, so its requested coordinated feed becomes about 172 mm/min at that default (338 × 51%). This is 30% above the previous programmed `F260` before the dashboard override.
 
-These are path feedrates, not the speed of every arm; acceleration and segment geometry also affect each axis. The Marlin per-axis limit is 390 mm/s (up from 260 mm/s), while homing now uses 320 mm/min on each axis (20% below the former 400 mm/min). The second endstop approach also slows from 200 to 160 mm/min because the existing bump divisor remains 2. The random path is longer because it uses the full stroke, so its total loop time may not fall even with a higher programmed feedrate.
+These are path feedrates, not the speed of every arm; acceleration and segment geometry also affect each axis. The Marlin per-axis limit is 390 mm/s (up from 260 mm/s), while homing uses 160 mm/min on each axis (50% below the previous 320 mm/min). Full six-arm homing now uses one continuous concurrent approach: motors stop independently at their switches, without a second bump. Initially pressed switches first release by 2 mm. Individual-axis homing retains the 80 mm/min second approach and bump divisor of 2. The random path is longer because it uses the full stroke, so its total loop time may not fall even with a higher programmed feedrate.
 
 ## Quiet random-motion G-code
 

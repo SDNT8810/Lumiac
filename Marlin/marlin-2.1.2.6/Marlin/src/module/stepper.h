@@ -45,6 +45,9 @@
 
 #include "planner.h"
 #include "stepper/indirection.h"
+#if ENABLED(SPIDER_CONCURRENT_HOMING)
+  #include "spider_homing.h"
+#endif
 #ifdef __AVR__
   #include "stepper/speed_lookuptable.h"
 #endif
@@ -521,6 +524,11 @@ class Stepper {
 
     static bool abort_current_block;        // Signals to the stepper that current block should be aborted
 
+    #if ENABLED(SPIDER_CONCURRENT_HOMING)
+      static volatile bool spider_homing_active;
+      static volatile uint8_t spider_homing_stopped;
+    #endif
+
     #if ENABLED(X_DUAL_ENDSTOPS)
       static bool locked_X_motor, locked_X2_motor;
     #endif
@@ -712,6 +720,12 @@ class Stepper {
 
     // Handle a triggered endstop
     static void endstop_triggered(const AxisEnum axis);
+
+    #if ENABLED(SPIDER_CONCURRENT_HOMING)
+      // Only call with an empty planner, before / after the single homing block.
+      static void begin_spider_homing();
+      static uint8_t end_spider_homing();
+    #endif
 
     // Triggered position of an axis in steps
     static int32_t triggered_position(const AxisEnum axis);

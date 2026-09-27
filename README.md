@@ -132,6 +132,8 @@ To flash the board:
 
 This is not stock Marlin. It contains the required six-axis configuration. Its legacy `M215` SD-file commands still require an SD card when sent directly to the Octopus USB port; the ESP handles dashboard, RF, and ESP-terminal `M215` commands locally and streams ordinary G-code to Marlin.
 
+Full homing (`G28` or `G28 X Y Z A B C`, including the ESP Home button and startup home) starts all six arms together at 160 mm/min per arm. Each motor stops at its own MIN endstop while the others continue the same move. There is one approach with no second bump; only arms already on an endstop first back off 2 mm to verify switch release. All six switches must be reached before positions are marked homed. A single-axis command such as `G28 X` retains standard individual homing. This behavior requires flashing the updated **Octopus** firmware; an ESP upload alone cannot change Marlin's homing routine.
+
 ## Run the browser tools
 
 The Node.js projects currently have no third-party packages, so they can be started directly.

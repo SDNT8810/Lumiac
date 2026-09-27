@@ -2160,7 +2160,12 @@
 #endif
 
 // Homing speeds (linear=mm/min, rotational=°/min)
-#define HOMING_FEEDRATE_MM_M { 320, 320, 320, 320, 320, 320 }
+#define HOMING_FEEDRATE_MM_M { 160, 160, 160, 160, 160, 160 }
+
+// Lumiac: G28 / G28 X Y Z A B C homes all six independent arms in one pass.
+// Each motor stops at its own MIN switch. Single-axis G28 keeps standard homing.
+#define SPIDER_CONCURRENT_HOMING
+#define SPIDER_HOME_RELEASE_MM 2.0f // Release any switches already pressed before the approach.
 
 // Validate that endstops are triggered on homing moves
 #define VALIDATE_HOMING_ENDSTOPS

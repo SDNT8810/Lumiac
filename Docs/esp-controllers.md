@@ -72,6 +72,8 @@ Dashboard, RF, and ESP-terminal `M215 S1`–`S7` and `M215 P1`–`P3` select pro
 
 The random programs run forward, then backward, returning to the exact starting position before `@LOOP` repeats. The ESP logs `Looping ESP flash program` at each restart. Startup and ESP-initiated homing have a five-minute limit; Marlin can remain silent while `G28` blocks, so the ESP does not queue periodic position probes during homing.
 
+The updated Octopus firmware homes all six arms together in one continuous approach when it receives the ESP's `G28 X Y Z A B C`. Each endstop stops only its own motor. Upload the new Marlin `firmware.bin` through the Octopus SD card to enable this; the ESP command stays the same. After the Octopus renames the file `FIRMWARE.CUR`, power off and remove the card again.
+
 ## Diagnostics and limitations
 
 - ESP32: USB debug logging at 115200 baud remains available.
