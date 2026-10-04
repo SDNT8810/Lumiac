@@ -776,6 +776,21 @@ inline void manage_inactivity(const bool no_stepper_sleep=false) {
  *  - Handle Joystick jogging
  */
 void idle(const bool no_stepper_sleep/*=false*/) {
+  #if ENABLED(LUMIAC_REALTIME_LIGHT)
+    // UART interrupts only publish a value; perform PWM updates in task context.
+    int16_t light;
+    {
+      CRITICAL_SECTION_START();
+      light = EmergencyParser::light_pending;
+      EmergencyParser::light_pending = -1;
+      CRITICAL_SECTION_END();
+    }
+    if (light >= 0) {
+      caselight.brightness = uint8_t(light);
+      caselight.on = light > 0;
+      caselight.update(false);
+    }
+  #endif
   #ifdef MAX7219_DEBUG_PROFILE
     CodeProfiler idle_profiler;
   #endif

@@ -11,6 +11,8 @@
 **/.pio/
 **/.piolibdeps/
 **/.pioenvs/
+/ESP_RF_Octopus/sdkconfig.esp32dev*
+/.test-tools/
 .sconsign*.dblite
 
 # Compiled firmware and native build artifacts

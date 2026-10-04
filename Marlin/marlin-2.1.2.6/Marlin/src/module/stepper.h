@@ -631,7 +631,19 @@ class Stepper {
 
     // The stepper subsystem goes to sleep when it runs out of things to execute.
     // Call this to notify the subsystem that it is time to go to work.
-    static void wake_up() { ENABLE_STEPPER_DRIVER_INTERRUPT(); }
+    #if ENABLED(REALTIME_REPORTING_COMMANDS)
+      static volatile bool realtime_paused;
+    #endif
+    static void wake_up() {
+      // Finishing a G1 enqueue must not undo a pause received in its UART ISR.
+      #if ENABLED(REALTIME_REPORTING_COMMANDS)
+        CRITICAL_SECTION_START();
+        if (!realtime_paused) ENABLE_STEPPER_DRIVER_INTERRUPT();
+        CRITICAL_SECTION_END();
+      #else
+        ENABLE_STEPPER_DRIVER_INTERRUPT();
+      #endif
+    }
 
     static bool is_awake() { return STEPPER_ISR_ENABLED(); }
 

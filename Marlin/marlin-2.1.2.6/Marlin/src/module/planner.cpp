@@ -74,6 +74,18 @@
 
 #include "../MarlinCore.h"
 
+#if ENABLED(LUMIAC_MOTION_FAN)
+  #include "../feature/e_parser.h"
+  #include "../feature/lumiac_fan.h"
+  #if !HAS_FAN0 || DISABLED(EMERGENCY_PARSER)
+    #error "LUMIAC_MOTION_FAN requires FAN0 and EMERGENCY_PARSER."
+  #endif
+  static uint8_t lumiac_fan_speed() {
+    return lumiac::motion_fan_pwm(EmergencyParser::fan_mode, planner.has_blocks_queued(),
+      TERN0(REALTIME_REPORTING_COMMANDS, stepper.realtime_paused));
+  }
+#endif
+
 #if HAS_LEVELING
   #include "../feature/bedlevel/bedlevel.h"
 #endif
@@ -1288,6 +1300,11 @@ void Planner::recalculate(TERN_(HINTS_SAFE_EXIT_SPEED, const_float_t safe_exit_s
 
   void Planner::sync_fan_speeds(uint8_t (&fan_speed)[FAN_COUNT]) {
 
+    #if ENABLED(LUMIAC_MOTION_FAN)
+      // FAN0 is live cooling, independent of fan values captured in queued moves.
+      fan_speed[0] = thermalManager.fan_speed[0] = lumiac_fan_speed();
+    #endif
+
     #if ENABLED(FAN_SOFT_PWM)
       #define _FAN_SET(F) thermalManager.soft_pwm_amount_fan[F] = CALC_FAN_SPEED(fan_speed[F]);
     #else
@@ -1327,6 +1344,11 @@ void Planner::recalculate(TERN_(HINTS_SAFE_EXIT_SPEED, const_float_t safe_exit_s
  */
 void Planner::check_axes_activity() {
 
+  #if ENABLED(LUMIAC_MOTION_FAN)
+    const uint8_t fan0_duty = lumiac_fan_speed();
+    thermalManager.fan_speed[0] = fan0_duty;
+  #endif
+
   #if HAS_DISABLE_AXES
     xyze_bool_t axis_active = { false };
   #endif
@@ -1354,7 +1376,11 @@ void Planner::check_axes_activity() {
 
     #if HAS_TAIL_FAN_SPEED
       FANS_LOOP(i) {
-        const uint8_t spd = thermalManager.scaledFanSpeed(i, block->fan_speed[i]);
+        const uint8_t spd =
+          #if ENABLED(LUMIAC_MOTION_FAN)
+            i == 0 ? fan0_duty :
+          #endif
+          thermalManager.scaledFanSpeed(i, block->fan_speed[i]);
         if (tail_fan_speed[i] != spd) {
           fans_need_update = true;
           tail_fan_speed[i] = spd;
@@ -1391,7 +1417,11 @@ void Planner::check_axes_activity() {
 
     #if HAS_TAIL_FAN_SPEED
       FANS_LOOP(i) {
-        const uint8_t spd = thermalManager.scaledFanSpeed(i);
+        const uint8_t spd =
+          #if ENABLED(LUMIAC_MOTION_FAN)
+            i == 0 ? fan0_duty :
+          #endif
+          thermalManager.scaledFanSpeed(i);
         if (tail_fan_speed[i] != spd) {
           fans_need_update = true;
           tail_fan_speed[i] = spd;
@@ -1675,7 +1705,14 @@ void Planner::check_axes_activity() {
 
 #endif
 
+#if ENABLED(SPIDER_CONCURRENT_HOMING)
+  uint32_t Planner::quick_stop_count = 0;
+#endif
+
 void Planner::quick_stop() {
+  #if ENABLED(SPIDER_CONCURRENT_HOMING)
+    ++quick_stop_count;
+  #endif
 
   // Remove all the queued blocks. Note that this function is NOT
   // called from the Stepper ISR, so we must consider tail as readonly!
@@ -1702,6 +1739,12 @@ void Planner::quick_stop() {
 
   // And stop the stepper ISR
   stepper.quick_stop();
+  #if ENABLED(REALTIME_REPORTING_COMMANDS)
+    // M410 must also abort a held block. Wake only after marking it aborted,
+    // otherwise synchronize() waits forever on a suspended stepper interrupt.
+    stepper.realtime_paused = false;
+    stepper.wake_up();
+  #endif
 }
 
 #if ENABLED(REALTIME_REPORTING_COMMANDS)
@@ -1709,6 +1752,7 @@ void Planner::quick_stop() {
   void Planner::quick_pause() {
     // Suspend until quick_resume is called
     // Don't empty buffers or queues
+    stepper.realtime_paused = true;
     const bool did_suspend = stepper.suspend();
     if (did_suspend)
       TERN_(FULL_REPORT_TO_HOST_FEATURE, set_and_report_grblstate(M_HOLD));
@@ -1716,6 +1760,7 @@ void Planner::quick_stop() {
 
   // Resume if suspended
   void Planner::quick_resume() {
+    stepper.realtime_paused = false;
     TERN_(FULL_REPORT_TO_HOST_FEATURE, set_and_report_grblstate(grbl_state_for_marlin_state()));
     stepper.wake_up();
   }

@@ -2300,6 +2300,12 @@ void prepare_line_to_destination() {
     void home_spider_group() {
       SERIAL_ECHOLNPGM("Starting continuous six-arm homing.");
       planner.synchronize();
+      const uint32_t stop_count = planner.quick_stop_count;
+      const auto cancelled = [stop_count]() {
+        if (planner.quick_stop_count == stop_count) return false;
+        SERIAL_ECHOLNPGM("Six-arm homing cancelled.");
+        return true;
+      };
       LOOP_NUM_AXES(a) set_axis_never_homed(AxisEnum(a));
       endstops.hit_on_purpose();
 
@@ -2317,6 +2323,7 @@ void prepare_line_to_destination() {
         release_hints.millimeters = SPIDER_HOME_RELEASE_MM;
         planner.buffer_segment(target, fr, active_extruder, release_hints);
         planner.synchronize();
+        if (cancelled()) return; // An intentional remote stop is not an endstop fault.
         LOOP_NUM_AXES(a) {
           if (TEST(pressed, a) && ABS(planner.get_axis_position_mm(AxisEnum(a)) - target[a]) > planner.mm_per_step[a]) {
             SERIAL_ERROR_MSG("Six-arm homing: release move interrupted.");
@@ -2348,6 +2355,8 @@ void prepare_line_to_destination() {
       planner.synchronize();
       const uint8_t stopped = stepper.end_spider_homing();
       endstops.hit_on_purpose();
+
+      if (cancelled()) return;
 
       if (!spider_homing::complete(stopped)) {
         SERIAL_ERROR_MSG("Six-arm homing: not all endstops reached.");

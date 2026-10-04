@@ -1,0 +1,11 @@
+.pio/
+.test-tools/
+build-upload.log
+serial-boot.log
+upload.log
+device-backups/
+build/
+sdkconfig
+sdkconfig.old
+sdkconfig.esp32dev
+sdkconfig.esp32dev.old

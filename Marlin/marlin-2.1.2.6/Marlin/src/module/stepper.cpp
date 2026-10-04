@@ -81,6 +81,10 @@
 
 Stepper stepper; // Singleton
 
+#if ENABLED(REALTIME_REPORTING_COMMANDS)
+  volatile bool Stepper::realtime_paused = false;
+#endif
+
 #define BABYSTEPPING_EXTRA_DIR_WAIT
 
 #ifdef __AVR__

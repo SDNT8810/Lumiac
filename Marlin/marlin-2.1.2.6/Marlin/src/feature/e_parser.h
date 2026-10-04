@@ -27,6 +27,13 @@
 
 #include "../inc/MarlinConfigPre.h"
 
+#if ANY(LUMIAC_REALTIME_LIGHT, LUMIAC_MOTION_FAN)
+  #include "lumiac_light_command.h"
+#endif
+#if ENABLED(LUMIAC_MOTION_FAN)
+  #include "lumiac_fan.h"
+#endif
+
 #if ENABLED(HOST_PROMPT_SUPPORT)
   #include "host_actions.h"
 #endif
@@ -50,7 +57,7 @@ class EmergencyParser {
 public:
 
   // Currently looking for: M108, M112, M410, M524, M876 S[0-9], S000, P000, R000
-  enum State : uint8_t {
+  enum State : uint16_t {
     EP_RESET,
     EP_N,
     EP_M,
@@ -58,6 +65,9 @@ public:
     EP_M10, EP_M108,
     EP_M11, EP_M112,
     EP_M4, EP_M41, EP_M410,
+    #if ANY(LUMIAC_REALTIME_LIGHT, LUMIAC_MOTION_FAN)
+      EP_LUMIAC_COMMENT,
+    #endif
     #if HAS_MEDIA
       EP_M5, EP_M52, EP_M524,
     #endif
@@ -79,6 +89,13 @@ public:
   static bool killed_by_M112;
   static bool quickstop_by_M410;
 
+  #if ENABLED(LUMIAC_REALTIME_LIGHT)
+    static volatile int16_t light_pending;
+  #endif
+  #if ENABLED(LUMIAC_MOTION_FAN)
+    static volatile uint8_t fan_mode;
+  #endif
+
   #if HAS_MEDIA
     static bool sd_abort_by_M524;
   #endif
@@ -93,12 +110,37 @@ public:
   FORCE_INLINE static void disable() { enabled = false; }
 
   FORCE_INLINE static void update(State &state, const uint8_t c) {
+    #if ANY(LUMIAC_REALTIME_LIGHT, LUMIAC_MOTION_FAN)
+      if (uint16_t(state) >= lumiac::light_start) {
+        #if ENABLED(LUMIAC_MOTION_FAN)
+          const uint16_t tag = uint16_t(state) & lumiac::fan_command_tag;
+          uint16_t command_state = uint16_t(state) & ~lumiac::fan_command_tag;
+        #else
+          constexpr uint16_t tag = 0;
+          uint16_t command_state = uint16_t(state);
+        #endif
+        const int value = lumiac::consume_light(command_state, c);
+        state = State(command_state ? command_state | tag : 0);
+        if (enabled && value >= 0) {
+          #if ENABLED(LUMIAC_MOTION_FAN)
+            if (tag && value <= lumiac::FanRandom) fan_mode = uint8_t(value);
+          #endif
+          #if ENABLED(LUMIAC_REALTIME_LIGHT)
+            if (!tag) light_pending = value;
+          #endif
+        }
+        return;
+      }
+    #endif
     switch (state) {
       case EP_RESET:
         switch (c) {
           case ' ': case '\n': case '\r': break;
           case 'N': state = EP_N; break;
           case 'M': state = EP_M; break;
+          #if ANY(LUMIAC_REALTIME_LIGHT, LUMIAC_MOTION_FAN)
+            case ';': state = EP_LUMIAC_COMMENT; break;
+          #endif
           #if ENABLED(REALTIME_REPORTING_COMMANDS)
             case 'S': state = EP_S; break;
             case 'P': state = EP_P; break;
@@ -111,6 +153,24 @@ public:
           default: state = EP_IGNORE;
         }
         break;
+
+      #if ANY(LUMIAC_REALTIME_LIGHT, LUMIAC_MOTION_FAN)
+        case EP_LUMIAC_COMMENT:
+          switch (c) {
+            #if ENABLED(LUMIAC_REALTIME_LIGHT)
+              case 'L': state = State(lumiac::light_start); break;
+            #endif
+            #if ENABLED(LUMIAC_MOTION_FAN)
+              case 'F': state = State(lumiac::light_start | lumiac::fan_command_tag); break;
+            #endif
+            #if ENABLED(REALTIME_REPORTING_COMMANDS)
+              case 'P': state = EP_P; break;
+              case 'R': state = EP_R; break;
+            #endif
+            default: state = ISEOL(c) ? EP_RESET : EP_IGNORE;
+          }
+          break;
+      #endif
 
       case EP_N:
         switch (c) {

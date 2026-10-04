@@ -40,6 +40,37 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         font-size: 14px;
       }
       body { min-height: 100vh; }
+      [hidden] { display: none !important; }
+      .bluetooth-bar { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+      .bluetooth-info { min-width: 0; overflow-wrap: anywhere; }
+      .bluetooth-info h2 { margin: 0 0 4px; font-size: 0.82rem; font-weight: 500; }
+      #bluetoothStatus { font-size: 0.78rem; color: var(--muted); }
+      #bluetoothActions {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(0, 1fr);
+        gap: 8px;
+        width: 100%;
+      }
+      #bluetoothActions button {
+        min-width: 0;
+        min-height: 36px;
+        padding: 8px 6px;
+        font-size: 0.72rem;
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+      #bluetoothDevices { margin-top: 10px; }
+      .bluetooth-device {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        padding: 6px 0;
+      }
+      .bluetooth-device span { min-width: 0; overflow-wrap: anywhere; }
+      .bluetooth-device button { min-width: 80px; }
+      #bluetoothError { margin: 8px 0 0; }
       .app-shell { min-height: 100vh; padding: 12px; }
       .panel { display: flex; flex-direction: column; gap: 12px; }
       .card {
@@ -114,6 +145,7 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         gap: 8px;
         align-items: start;
       }
+      #bluetoothKeyRow { grid-template-columns: repeat(5, minmax(0, 1fr)); }
       .remote-key {
         display: grid;
         justify-items: center;
@@ -129,8 +161,13 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         transition: background 120ms ease, box-shadow 120ms ease, transform 120ms ease;
       }
       .remote-key.active .remote-key-dot {
-        background: #5f646a;
-        box-shadow: 0 0 0 3px rgba(95,100,106,0.14);
+        background: #24a148;
+        box-shadow: 0 0 0 3px rgba(36,161,72,0.16);
+        transform: scale(1.05);
+      }
+      .remote-key.held .remote-key-dot {
+        background: #e58b24;
+        box-shadow: 0 0 0 3px rgba(229,139,36,0.18);
         transform: scale(1.05);
       }
       .remote-key-label {
@@ -173,6 +210,21 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
       .ghost-button {
         background: rgba(255,255,255,0.42);
         color: var(--ink);
+      }
+      .preset-button {
+        background: #d1cec7;
+        color: #55534d;
+        border-color: #c4c0b8;
+      }
+      .ghost-button.selected {
+        background: #24783e;
+        color: #fff;
+        border-color: #24783e;
+      }
+      .ghost-button.running {
+        background: #e58b24;
+        color: #291b09;
+        border-color: #e58b24;
       }
       .danger-button {
         background: linear-gradient(180deg, rgba(164,54,54,0.96), rgba(125,31,31,0.96));
@@ -416,17 +468,17 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
           <div class="command-grid" style="margin-top:10px;">
             <div class="command-block">
               <div class="button-row">
-                <button id="pos1Button" class="ghost-button" type="button">POS 1</button>
-                <button id="pos2Button" class="ghost-button" type="button">POS 2</button>
-                <button id="pos3Button" class="ghost-button" type="button">POS 3</button>
+                <button id="pos1Button" class="ghost-button preset-button" type="button" aria-pressed="false">POS 1</button>
+                <button id="pos2Button" class="ghost-button preset-button" type="button" aria-pressed="false">POS 2</button>
+                <button id="pos3Button" class="ghost-button preset-button" type="button" aria-pressed="false">POS 3</button>
                 <button id="randomButton" type="button">Random</button>
                 <button id="stopButton" class="danger-button" type="button">Stop</button>
                 <button id="resetOctopusButton" class="danger-button" type="button">Reset</button>
               </div>
             </div>
             <div class="command-block">
-              <div class="card-subhead"><h3>Remote Keys</h3><span>Live</span></div>
-              <div class="remote-key-row">
+              <div class="card-subhead"><h3>Remote keys</h3><span id="remoteKeySource">RF</span></div>
+              <div id="rfKeyRow" class="remote-key-row">
                 <div id="remoteKeyLightOn" class="remote-key"><span class="remote-key-dot"></span><span class="remote-key-label">Light+</span></div>
                 <div id="remoteKeyLightOff" class="remote-key"><span class="remote-key-dot"></span><span class="remote-key-label">Light-</span></div>
                 <div id="remoteKeyPos1" class="remote-key"><span class="remote-key-dot"></span><span class="remote-key-label">Pos1</span></div>
@@ -434,6 +486,13 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
                 <div id="remoteKeyRandom" class="remote-key"><span class="remote-key-dot"></span><span class="remote-key-label">Random</span></div>
                 <div id="remoteKeyDimmer" class="remote-key"><span class="remote-key-dot"></span><span class="remote-key-label">Dim</span></div>
                 <div id="remoteKeyPos3" class="remote-key"><span class="remote-key-dot"></span><span class="remote-key-label">Pos3</span></div>
+              </div>
+              <div id="bluetoothKeyRow" class="remote-key-row" hidden>
+                <div class="remote-key" data-key="0"><span class="remote-key-dot"></span><span class="remote-key-label">+</span></div>
+                <div class="remote-key" data-key="1"><span class="remote-key-dot"></span><span class="remote-key-label">−</span></div>
+                <div class="remote-key" data-key="3"><span class="remote-key-dot"></span><span class="remote-key-label">Back</span></div>
+                <div class="remote-key" data-key="4"><span class="remote-key-dot"></span><span class="remote-key-label">Play/Pause</span></div>
+                <div class="remote-key" data-key="2"><span class="remote-key-dot"></span><span class="remote-key-label">Next</span></div>
               </div>
             </div>
             <div class="command-block">
@@ -448,6 +507,23 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
               </div>
             </div>
           </div>
+        </div>
+
+        <div id="bluetoothCard" class="card" hidden>
+          <div class="bluetooth-bar">
+            <div class="bluetooth-info">
+              <h2>Bluetooth remote</h2>
+              <span id="bluetoothStatus" role="status">Starting...</span>
+            </div>
+            <div id="bluetoothActions">
+              <button id="bluetoothScan" type="button">Scan</button>
+              <button id="bluetoothReconnect" type="button" hidden>Reconnect</button>
+              <button id="bluetoothDisconnect" class="ghost-button" type="button" hidden>Disconnect</button>
+              <button id="bluetoothForget" class="ghost-button" type="button" hidden>Forget</button>
+            </div>
+          </div>
+          <div id="bluetoothDevices" hidden></div>
+          <p id="bluetoothError" role="alert" hidden></p>
         </div>
 
         <div class="card radial-card">
@@ -489,6 +565,7 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         feed: 305,
         lightOn: false,
         brightness: 0,
+        rfOnline: false,
         remoteButtons: {
           lightOn: false,
           lightOff: false,
@@ -550,15 +627,66 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
         pill.classList.toggle("off", !active);
         statusEl.textContent = text;
       }
+      const keyIndicators = new Map();
+      function showRemoteKeys(bluetooth) {
+        document.getElementById("rfKeyRow").hidden = bluetooth;
+        document.getElementById("bluetoothKeyRow").hidden = !bluetooth;
+        document.getElementById("remoteKeySource").textContent = bluetooth ? "Bluetooth" : "RF";
+      }
+      function syncKeyRow(id, keys, immediate = false) {
+        document.querySelectorAll("#" + id + " .remote-key").forEach((el, index) => {
+          const bit = 1 << Number(el.dataset.key === undefined ? index : el.dataset.key);
+          const down = !!(keys.down & bit), held = down && !!(keys.held & bit);
+          const previous = keyIndicators.get(el) || { down: false, held: false, since: 0, timer: 0 };
+          if (!immediate && down === previous.down && held === previous.held) return;
+          clearTimeout(previous.timer);
+          if (down && !previous.down) previous.since = performance.now();
+          const paint = () => {
+            el.classList.toggle("active", down && !held);
+            el.classList.toggle("held", held);
+            const label = el.querySelector(".remote-key-label").textContent;
+            el.setAttribute("role", "img");
+            el.setAttribute("aria-label", label + ": " + (held ? "held" : down ? "pressed" : "released"));
+          };
+          // Keep very short taps visible when down/up arrive in one network batch.
+          const delay = !immediate && !down && previous.down && !previous.held ?
+            Math.max(0, 180 - (performance.now() - previous.since)) : 0;
+          previous.timer = delay ? setTimeout(paint, delay) : 0;
+          if (!delay) paint();
+          previous.down = down; previous.held = held;
+          keyIndicators.set(el, previous);
+        });
+      }
+      function syncRemoteKeys(data) {
+        if (data.rfKeys) {
+          syncKeyRow("rfKeyRow", data.rfKeys);
+          if (data.rfKeys.down) showRemoteKeys(false);
+        }
+        if (data.bluetoothKeys) {
+          syncKeyRow("bluetoothKeyRow", data.bluetoothKeys);
+          if (data.bluetoothKeys.down) showRemoteKeys(true);
+        }
+      }
+      function clearRemoteKeys() {
+        syncKeyRow("rfKeyRow", {down: 0, held: 0}, true);
+        syncKeyRow("bluetoothKeyRow", {down: 0, held: 0}, true);
+      }
       function syncRemoteButtons(buttons) {
         state.remoteButtons = Object.assign({}, state.remoteButtons, buttons || {});
-        els.remoteKeyLightOn.classList.toggle("active", !!state.remoteButtons.lightOn);
-        els.remoteKeyLightOff.classList.toggle("active", !!state.remoteButtons.lightOff);
-        els.remoteKeyPos1.classList.toggle("active", !!state.remoteButtons.pos1);
-        els.remoteKeyPos2.classList.toggle("active", !!state.remoteButtons.pos2);
-        els.remoteKeyRandom.classList.toggle("active", !!state.remoteButtons.random);
-        els.remoteKeyDimmer.classList.toggle("active", !!state.remoteButtons.dimmer);
-        els.remoteKeyPos3.classList.toggle("active", !!state.remoteButtons.pos3);
+        const names = ["lightOn", "lightOff", "pos1", "pos2", "random", "dimmer", "pos3"];
+        const down = names.reduce((mask, name, index) => mask | (state.remoteButtons[name] ? 1 << index : 0), 0);
+        syncRemoteKeys({rfKeys: {down, held: 0}});
+      }
+      function syncPreset(motion) {
+        [els.pos1Button, els.pos2Button, els.pos3Button].forEach((button, index) => {
+          const current = Number(motion.preset) === index + 1;
+          const running = current && motion.presetState === "moving";
+          const reached = current && motion.presetState === "reached";
+          button.classList.toggle("running", running);
+          button.classList.toggle("selected", reached);
+          button.setAttribute("aria-pressed", String(running || reached));
+          button.setAttribute("aria-label", button.textContent + (running ? motion.paused ? ": paused" : ": moving" : reached ? ": reached" : ": inactive"));
+        });
       }
       function send(obj) {
         if (state.socket && state.socket.readyState === WebSocket.OPEN) {
@@ -610,10 +738,14 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
       function applyState(data) {
         setPill(els.wifiPill, els.wifiStatus, true, "On");
         setPill(els.octopusPill, els.octopusStatus, !!data.octopusOnline, data.octopusOnline ? "On" : "Off");
-        setPill(els.remotePill, els.remoteStatus, !!data.remoteOnline, data.remoteOnline ? "On" : "Idle");
+        state.rfOnline = !!data.remoteOnline;
+        setPill(els.remotePill, els.remoteStatus, state.rfOnline || !!bluetoothState.connected,
+          bluetoothState.connected ? "Bluetooth" : state.rfOnline ? "RF" : "Idle");
         if (data.feed !== undefined) syncSpeed(data.feed);
         if (data.lights) syncLamp(data.lights.on, data.lights.brightness);
-        if (data.remoteButtons) syncRemoteButtons(data.remoteButtons);
+        if (data.remoteButtons && !data.rfKeys) syncRemoteButtons(data.remoteButtons);
+        syncRemoteKeys(data);
+        if (data.motion && data.motion.preset !== undefined) syncPreset(data.motion);
         if (Array.isArray(data.randomCodes)) state.randomCodes = data.randomCodes.slice();
         if (data.positions) {
           AXES.forEach((axis) => {
@@ -622,6 +754,76 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
           syncPositions();
         }
       }
+      let bluetoothState = {};
+      let bluetoothBusy = false;
+      function renderBluetooth(data) {
+        if (!!data.connected !== !!bluetoothState.connected) {
+          showRemoteKeys(!!data.connected);
+          if (!data.connected) syncKeyRow("bluetoothKeyRow", {down: 0, held: 0}, true);
+        }
+        bluetoothState = data;
+        setPill(els.remotePill, els.remoteStatus, state.rfOnline || !!data.connected,
+          data.connected ? "Bluetooth" : state.rfOnline ? "RF" : "Idle");
+        document.getElementById("bluetoothCard").hidden = !data.supported;
+        if (!data.supported) return;
+        document.getElementById("bluetoothStatus").textContent = data.connected && data.controlsReady && data.name ?
+          data.name + " · Connected" : data.message || "Bluetooth unavailable";
+        document.getElementById("bluetoothScan").hidden = !!(data.connected || data.connecting);
+        document.getElementById("bluetoothScan").disabled = bluetoothBusy || !data.ready || data.scanning || data.connected || data.connecting;
+        document.getElementById("bluetoothReconnect").hidden = !data.savedAddress || data.connected || data.connecting;
+        document.getElementById("bluetoothReconnect").disabled = bluetoothBusy || !data.ready || data.connecting;
+        document.getElementById("bluetoothDisconnect").disabled = bluetoothBusy || !(data.connected || data.connecting);
+        document.getElementById("bluetoothDisconnect").hidden = !(data.connected || data.connecting);
+        document.getElementById("bluetoothForget").hidden = !data.savedAddress;
+        document.getElementById("bluetoothForget").disabled = bluetoothBusy;
+        const devices = document.getElementById("bluetoothDevices");
+        devices.hidden = !!data.connected || !(data.devices || []).length;
+        devices.replaceChildren();
+        if (!data.connected) (data.devices || []).forEach((device) => {
+          const row = document.createElement("div"); row.className = "bluetooth-device";
+          const name = document.createElement("span");
+          name.textContent = device.name === "Unknown remote" ? device.address : device.name;
+          name.title = device.address;
+          const pair = document.createElement("button");
+          pair.type = "button"; pair.textContent = "Pair";
+          pair.disabled = bluetoothBusy || !data.ready || data.connecting;
+          pair.addEventListener("click", () => bluetoothCommand("connect", device.address));
+          row.append(name, pair); devices.append(row);
+        });
+      }
+      async function refreshBluetooth() {
+        const response = await fetch("/api/bluetooth", { cache: "no-store" });
+        if (!response.ok) throw new Error("Bluetooth status unavailable (" + response.status + ")");
+        renderBluetooth(await response.json());
+      }
+      async function bluetoothCommand(action, address) {
+        if (bluetoothBusy) return;
+        bluetoothBusy = true; renderBluetooth(bluetoothState);
+        const error = document.getElementById("bluetoothError"); error.textContent = ""; error.hidden = true;
+        try {
+          const response = await fetch("/api/bluetooth", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action, address: address || "" })
+          });
+          const result = await response.json();
+          if (!response.ok || !result.ok) throw new Error(result.message || "Bluetooth request failed");
+          await refreshBluetooth();
+        } catch (e) { error.textContent = e.message; error.hidden = false; }
+        finally { bluetoothBusy = false; renderBluetooth(bluetoothState); }
+      }
+      document.getElementById("bluetoothScan").addEventListener("click", () => bluetoothCommand("scan"));
+      document.getElementById("bluetoothReconnect").addEventListener("click", () => bluetoothCommand("connect", bluetoothState.savedAddress));
+      document.getElementById("bluetoothDisconnect").addEventListener("click", () => bluetoothCommand("disconnect"));
+      document.getElementById("bluetoothForget").addEventListener("click", () => bluetoothCommand("forget"));
+      async function pollBluetooth() {
+        if (!bluetoothBusy) {
+          try { await refreshBluetooth(); }
+          catch (e) { document.getElementById("bluetoothStatus").textContent = e.message; }
+        }
+        setTimeout(pollBluetooth, 1500);
+      }
+      pollBluetooth();
+
       function createLegControls() {
         const fragment = document.createDocumentFragment();
         legDefinitions.forEach((leg, index) => {
@@ -712,10 +914,12 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
           let data = null;
           try { data = JSON.parse(event.data); } catch (error) { return; }
           if (data.type === "state") applyState(data);
+          else if (data.type === "remote_keys") syncRemoteKeys(data);
           else if (data.type === "log" && data.line) log(data.line);
           else if (data.type === "status" && data.message) log(data.message);
         });
         state.socket.addEventListener("close", () => {
+          clearRemoteKeys();
           log("WebSocket disconnected. Reconnecting...");
           clearTimeout(state.reconnectTimer);
           state.reconnectTimer = setTimeout(connectSocket, 1000);

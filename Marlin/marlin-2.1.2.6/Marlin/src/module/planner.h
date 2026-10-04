@@ -927,6 +927,9 @@ class Planner {
     // Called to force a quick stop of the machine (for example, when
     // a Full Shutdown is required, or when endstops are hit)
     static void quick_stop();
+    #if ENABLED(SPIDER_CONCURRENT_HOMING)
+      static uint32_t quick_stop_count;
+    #endif
 
     #if ENABLED(REALTIME_REPORTING_COMMANDS)
       // Force a quick pause of the machine (e.g., when a pause is required in the middle of move).

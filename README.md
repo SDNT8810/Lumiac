@@ -93,6 +93,8 @@ The access-point credentials are defaults stored in [`ESP_RF_Octopus/src/main.cp
 
 ESP32 USB logs remain available at 115200 baud. ESP-12S logs are available through the web interface: its UART pins are dedicated to Marlin during normal operation.
 
+The original ESP32 also supports the Satechi/POP Multimedia Bluetooth remote through the dashboard's **Bluetooth remote** panel. Scan and pair there, then use volume keys for brightness (2% per tap, 30% per second when held), Next/Back for POS 1–3, Play/Pause for motion, and a 2.5-second Play hold for standby. Pairing needs only the ESP32; lamp and motion control require the updated ESP32 and Octopus firmware. See [Bluetooth setup, controls and verification](Docs/bluetooth-remote.md).
+
 ## Build and flash the Octopus firmware
 
 The root helper builds the `STM32F446ZE_btt` environment:
@@ -175,6 +177,7 @@ PORT=3001 npm start
 - The Octopus firmware exposes six motion axes as `X Y Z A B C`.
 - The ESP handles `M215` selections and pause/resume/stop controls for programs stored in its flash, then streams G-code to the Octopus over UART. The Octopus needs no SD card for normal operation through the ESP.
 - `M355` controls the lamp through the Octopus bed/heater MOSFET output; this configuration does not use a heated bed.
+- FAN0 automatically runs at 30% while idle or paused, 80% during normal movement, and 100% during random movement. Holding Bluetooth Play/Pause for 2.5 seconds enters standby and turns both FAN0 and the lamps off. Flash both the ESP and Octopus firmware for this behavior; see [FAN0 setup](Docs/bluetooth-remote.md#fan0-cooling).
 - The controller's Octopus reset connection is open-drain/active-low. ESP-12S boot/programming constraints are described in [the wiring guide](Docs/esp-controllers.md).
 
 See [`Docs/pinMapping`](Docs/pinMapping) before connecting any hardware. Treat the firmware source as the final authority if documentation and code differ.

@@ -14,6 +14,8 @@
 #include "logo_jpg.h"
 #include "board_config.h"
 #include "embedded_gcodes.h"
+#include "bluetooth_remote.h"
+#include "remote_feedback.h"
 
 namespace {
 
@@ -21,7 +23,7 @@ using namespace board;
 constexpr const char* kBoardName = board::kName;
 constexpr char kRemoteBoardName[] = "RF Remote";
 
-constexpr char kApSsid[] = "ESP_RF_Octopus";
+constexpr char kApSsid[] = "Lumiac";
 constexpr char kApPassword[] = "octopus123";
 constexpr byte kDnsPort = 53;
 const IPAddress kApIp(192, 168, 4, 1);
@@ -66,7 +68,9 @@ constexpr uint32_t kWebSocketHeartbeatMs = 10000;
 constexpr uint32_t kWebSocketPongTimeoutMs = 3000;
 constexpr uint8_t kWebSocketDisconnectCount = 2;
 constexpr uint32_t kManualResetVerifyTimeoutMs = 15000;
-constexpr uint32_t kEmbeddedMarkerTimeoutMs = 300000;
+// Completion fences now wait for physical travel. POS3 at the minimum 10 mm/min
+// can take much longer than five minutes; pauses are excluded separately.
+constexpr uint32_t kEmbeddedMarkerTimeoutMs = 3600000;
 constexpr uint32_t kRfInputArmDelayMs = 3000;
 constexpr size_t kSerialLineMax = 256;
 constexpr size_t kMaxRandomCodes = 16;
@@ -136,6 +140,17 @@ bool remoteOnline = false;
 bool spiderProgramActive = false;
 bool spiderProgramPaused = false;
 bool octopusHomed = false;
+bool octopusRealtime = false;
+bool octopusMotionFan = false;
+int8_t lastFanMode = -1;
+bool standby = false;
+bool playTapHandled = false;
+unsigned selectedPreset = 0;
+// Keep the cycling cursor separate from the position actually running/reached.
+unsigned runningPreset = 0;
+unsigned reachedPreset = 0;
+remote_control::KeyFeedback rfFeedback;
+uint32_t motionPausedAt = 0;
 struct EmbeddedPlayback {
   const embedded_gcodes::Program* program = nullptr;
   size_t offset = 0;
@@ -207,7 +222,6 @@ void runSpiderLoopRestartIfReady();
 bool startupAutomationActive();
 void updateDimmerHold(const uint32_t now);
 void issueImmediateOverride(const String& source, const char* reason = nullptr);
-void moveAllLegsToPosition(const String& source, const char* reason, const int target);
 bool requestAutomaticOctopusReset(const String& source, const String& reason, const String& statusMessage);
 void markOctopusFirmwareReady();
 void syncMotionSpeedToOctopus(const String& source, const bool spiderJob);
@@ -245,6 +259,9 @@ void beginOctopusSerial() {
   // Terminate any partial line left by the ESP8266 ROM's boot output.
   octopusSerial.print('\n');
 #else
+  // M115 is a multi-line burst. Keep the whole reply while Bluetooth starts or
+  // a dashboard response is being sent, including Lumiac's capability lines.
+  octopusSerial.setRxBufferSize(4096);
   octopusSerial.begin(kOctopusBaud, SERIAL_8N1, kOctopusRxPin, kOctopusTxPin);
 #endif
 }
@@ -363,6 +380,11 @@ void broadcastStatus(const String& message) {
 }
 
 String lampStateCommand(const bool on, const uint8_t brightness) {
+  if (octopusRealtime) {
+    char command[6];
+    snprintf(command, sizeof(command), ";L%03u", on ? brightness : 0);
+    return String(command);
+  }
   if (!(on && brightness > 0))
     return "M355 S0";
 
@@ -383,6 +405,13 @@ void fillStateDocument(JsonDocument& doc) {
   doc["remoteOnline"] = remoteOnline;
   doc["feed"] = currentFeedRate;
   doc["remoteIp"] = remoteIpString;
+  JsonObject motion = doc["motion"].to<JsonObject>();
+  motion["active"] = spiderProgramActive;
+  motion["paused"] = spiderProgramPaused;
+  motion["standby"] = standby;
+  motion["preset"] = runningPreset ? runningPreset : reachedPreset;
+  motion["presetState"] = runningPreset ? "moving" : reachedPreset ? "reached" : "idle";
+  motion["realtimeReady"] = octopusRealtime;
 
   JsonObject accessPoint = doc["accessPoint"].to<JsonObject>();
   accessPoint["ssid"] = kApSsid;
@@ -407,6 +436,10 @@ void fillStateDocument(JsonDocument& doc) {
   remoteButtons["random"] = isRfPressed(buttons[kButtonRandom].stableLevel);
   remoteButtons["dimmer"] = isRfPressed(buttons[kButtonDimmer].stableLevel);
   remoteButtons["pos3"] = isRfPressed(buttons[kButtonPos3].stableLevel);
+  JsonObject rfKeys = doc["rfKeys"].to<JsonObject>();
+  rfKeys["down"] = rfFeedback.down();
+  rfKeys["held"] = rfFeedback.held();
+  bluetooth_remote::keyState(doc["bluetoothKeys"].to<JsonObject>());
 
   JsonArray codes = doc["randomCodes"].to<JsonArray>();
   for (size_t i = 0; i < randomCodeCount; ++i)
@@ -417,6 +450,28 @@ void broadcastState() {
   JsonDocument doc;
   fillStateDocument(doc);
   broadcastJson(doc);
+}
+
+void broadcastKeys(const char* source, uint8_t down, uint8_t held) {
+  JsonDocument doc;
+  doc["type"] = "remote_keys";
+  JsonObject keys = doc[source].to<JsonObject>();
+  keys["down"] = down;
+  keys["held"] = held;
+  broadcastJson(doc);
+}
+
+void broadcastBluetoothKeys(uint8_t down, uint8_t held) {
+  broadcastKeys("bluetoothKeys", down, held);
+}
+
+void updateRfFeedback(uint32_t now) {
+  uint8_t down = 0;
+  for (size_t i = 0; i < kButtonCount; ++i)
+    if (buttons[i].pin != kUnusedPin && isRfPressed(buttons[i].stableLevel)) down |= 1u << i;
+  rfFeedback.update(down, now, [](uint8_t pressed, uint8_t held) {
+    broadcastKeys("rfKeys", pressed, held);
+  });
 }
 
 void markRemoteActivity(const char* reason) {
@@ -464,6 +519,15 @@ void sendToOctopus(const String& line, const String& source, const bool logTx) {
   octopusSerial.print('\n');
 }
 
+void syncFanModeToOctopus() {
+  if (!octopusMotionFan) return;
+  // Octopus chooses 30/80/100% from actual motion and its real-time pause latch.
+  const int8_t mode = standby ? 0 : embeddedPlayback.program && embeddedPlayback.program->loop ? 2 : 1;
+  if (mode == lastFanMode) return;
+  sendToOctopus(mode == 0 ? ";F000" : mode == 2 ? ";F002" : ";F001", kBoardName, false);
+  lastFanMode = mode;
+}
+
 void sendSpiderHomeCommand(const String& source, const bool logTx, const bool emitCompletionMarker) {
   sendToOctopus(kSpiderHomeCommand, source, logTx);
   if (emitCompletionMarker)
@@ -491,7 +555,6 @@ void setFeedRate(const int feed, const String& source, const String& reason) {
 void setLightState(const bool on, const uint8_t brightness, const String& source, const String& reason, const bool syncToOctopus = true) {
   const bool nextOn = on && brightness > 0;
   const bool changed = nextOn != lightState.on || brightness != lightState.brightness;
-  const bool resumeSpiderProgram = syncToOctopus && changed && pauseSpiderProgramForAdjustment(source, reason);
 
   lightState.on = nextOn;
   lightState.brightness = brightness;
@@ -500,9 +563,6 @@ void setLightState(const bool on, const uint8_t brightness, const String& source
 
   if (syncToOctopus)
     sendToOctopus(lampStateCommand(nextOn, brightness), source);
-  if (resumeSpiderProgram)
-    resumeSpiderProgramAfterAdjustment(source, reason);
-
   if (changed) {
     logMessage(source, reason + " -> lights " + (lightState.on ? String("ON") : String("OFF")) + ", brightness=" + String(lightState.brightness));
     broadcastState();
@@ -558,6 +618,7 @@ void queryRandomCodes(const String& source) {
 }
 
 void stopEmbeddedProgram() {
+  runningPreset = reachedPreset = 0;
   embeddedPlayback.program = nullptr;
   embeddedPlayback.offset = 0;
   embeddedPlayback.waitingForHome = false;
@@ -569,12 +630,15 @@ void stopEmbeddedProgram() {
   spiderProgramPaused = false;
 }
 
-void startEmbeddedProgram(const embedded_gcodes::Program& program, const String& source) {
+void startEmbeddedProgram(const embedded_gcodes::Program& program, const String& source, const unsigned preset = 0) {
   stopEmbeddedProgram();
+  runningPreset = preset;
+  if (preset) selectedPreset = preset;
   embeddedPlayback.program = &program;
   embeddedPlayback.waitingForHome = !octopusHomed;
   embeddedPlayback.homeStartedMs = millis();
   spiderProgramActive = true;
+  syncFanModeToOctopus();
 
   // Match the acceleration limits formerly applied by Marlin's SD launcher.
   sendToOctopus("M201 X50 Y50 Z50 A50 B50 C50", source, false);
@@ -598,15 +662,22 @@ bool handleEmbeddedM215(const String& line, const String& source) {
     return true;
   }
   if (command == "M215 P") {
-    if (embeddedPlayback.program) {
+    if ((embeddedPlayback.program || startupHomeInProgress) && !spiderProgramPaused) {
+      motionPausedAt = millis();
       spiderProgramPaused = true;
+      if (octopusRealtime) sendToOctopus(";P000", source, false);
       broadcastState();
     }
     return true;
   }
   if (command == "M215 R") {
-    if (embeddedPlayback.program) {
+    if (spiderProgramPaused) {
+      const uint32_t pausedFor = millis() - motionPausedAt;
+      embeddedPlayback.homeStartedMs += pausedFor;
+      embeddedPlayback.markerSentMs += pausedFor;
+      startupHomeStartedMs += pausedFor;
       spiderProgramPaused = false;
+      if (octopusRealtime) sendToOctopus(";R000", source, false);
       broadcastState();
     }
     return true;
@@ -625,7 +696,7 @@ bool handleEmbeddedM215(const String& line, const String& source) {
   if (command.startsWith("M215 P") && command.length() == 7) {
     const int preset = command[6] - '1';
     if (preset >= 0 && preset < 3) {
-      startEmbeddedProgram(embedded_gcodes::presetPrograms[preset], source);
+      startEmbeddedProgram(embedded_gcodes::presetPrograms[preset], source, preset + 1);
       return true;
     }
   }
@@ -677,6 +748,7 @@ bool nextEmbeddedCommand(String& command) {
 
 void pumpEmbeddedProgram() {
   if (!embeddedPlayback.program) return;
+  if (spiderProgramPaused) return;
   if (embeddedPlayback.waitingForHome) {
     if (millis() - embeddedPlayback.homeStartedMs < kStartupHomeTimeoutMs) return;
     logMessage(kBoardName, "ESP G-code stream timed out waiting for homing; stopping motion.");
@@ -704,7 +776,11 @@ void pumpEmbeddedProgram() {
   command.reserve(96);
   if (!nextEmbeddedCommand(command)) {
     const String name = embeddedPlayback.program->name;
+    // Every move's M400 + matching acknowledgement has completed before EOF.
+    // Aborts and errors use stopEmbeddedProgram() without marking a POS reached.
+    const unsigned completedPreset = runningPreset;
     stopEmbeddedProgram();
+    reachedPreset = completedPreset;
     logMessage(kBoardName, String("ESP flash program finished: ") + name);
     broadcastState();
     return;
@@ -714,6 +790,9 @@ void pumpEmbeddedProgram() {
   embeddedPlayback.waitingForMarker = true;
   embeddedPlayback.markerSentMs = millis();
   sendToOctopus(command, kBoardName, false);
+  // Acknowledge completion, not merely planner admission. Only one move can be
+  // outstanding, so a stopped program cannot leave future moves in the queue.
+  if (command.startsWith("G1 ")) sendToOctopus("M400", kBoardName, false);
   sendToOctopus("M118 " + embeddedPlayback.marker, kBoardName, false);
 }
 
@@ -915,6 +994,12 @@ void resumeSpiderProgramAfterAdjustment(const String& source, const String& reas
 }
 
 void prepareMotionCommand(const String& source, const char* reason, const bool spiderJob = false) {
+  if (standby) {
+    standby = false;
+    syncFanModeToOctopus();
+    setBrightness(179, source, "Wake at 70%");
+    sendToOctopus("M17", source, false);
+  }
   issueImmediateOverride(source, reason);
   syncMotionSpeedToOctopus(source, spiderJob);
 }
@@ -1015,30 +1100,6 @@ void stopMotionAndTurnLightsOff(const String& source, const char* reason) {
   broadcastState();
 }
 
-void moveAllLegsToPosition(const String& source, const char* reason, const int target) {
-  const int clampedTarget = constrain(target, 0, kMaxAxisPosition);
-  clearDesiredSpiderLoop();
-  cancelStartupAutomation(source, reason);
-  prepareMotionCommand(source, reason);
-
-  String gcode = "G1";
-  for (size_t i = 0; i < kAxisCount; ++i) {
-    axisPositions[i] = static_cast<float>(clampedTarget);
-    gcode += ' ';
-    gcode += kAxes[i];
-    gcode += String(clampedTarget);
-  }
-  gcode += " F";
-  gcode += String(currentFeedRate);
-
-  sendToOctopus("G90", source, false);
-  sendToOctopus(gcode, source);
-  spiderProgramActive = false;
-  spiderProgramPaused = false;
-  broadcastStatus(String(reason) + " -> all legs to " + String(clampedTarget) + ".");
-  broadcastState();
-}
-
 void stepDimmer(const String& source, const String& reason) {
   const int baseBrightness = lightState.on
     ? lightState.brightness
@@ -1059,10 +1120,10 @@ void handleRfButtonPressed(const ButtonIndex index) {
       stopMotionAndTurnLightsOff(kRemoteBoardName, "RF LIGHT_OFF");
       return;
     case kButtonPos1:
-      moveAllLegsToPosition(kRemoteBoardName, "RF P1", 0);
+      handleSimpleAction("pos1", kRemoteBoardName);
       return;
     case kButtonPos2:
-      moveAllLegsToPosition(kRemoteBoardName, "RF P2", 55);
+      handleSimpleAction("pos2", kRemoteBoardName);
       return;
     case kButtonRandom:
       handleSimpleAction("random_position", kRemoteBoardName);
@@ -1074,7 +1135,7 @@ void handleRfButtonPressed(const ButtonIndex index) {
       stepDimmer(kRemoteBoardName, "RF DIMMER");
       return;
     case kButtonPos3:
-      moveAllLegsToPosition(kRemoteBoardName, "RF P3", 120);
+      handleSimpleAction("pos3", kRemoteBoardName);
       return;
     case kButtonReserve:
       logMessage(kRemoteBoardName, "RESERVE button pressed. No action assigned.");
@@ -1108,6 +1169,8 @@ void pollRfButtons() {
       button.lastChangeMs = now;
     }
 
+    // Show physical keys even while motion startup is waiting for Octopus.
+    updateRfFeedback(now);
     if (now < rfInputsArmReadyMs) return;
     if (startupAutomationActive()) return;
 
@@ -1152,6 +1215,7 @@ void pollRfButtons() {
     }
 
     button.stableLevel = button.lastRead;
+    updateRfFeedback(now);
     if (isRfPressed(button.stableLevel)) {
       handleRfButtonPressed(static_cast<ButtonIndex>(i));
     } else {
@@ -1160,6 +1224,7 @@ void pollRfButtons() {
     stateChanged = true;
   }
 
+  updateRfFeedback(now);
   updateDimmerHold(now);
 
   if (stateChanged)
@@ -1203,6 +1268,65 @@ void runRandomPosition(const String& source) {
   broadcastStatus("Running random spider position S" + String(code) + ".");
 }
 
+void handleBluetoothEvent(const remote_control::Event event) {
+  using remote_control::Event;
+  constexpr char source[] = "Bluetooth remote";
+  if (event == Event::Brighter || event == Event::Dimmer) {
+    const int value = remote_control::stepBrightness(lightState.brightness, lightState.on, event == Event::Brighter ? 1 : -1);
+    if (value != lightState.brightness || lightState.on != (value > 0))
+      setBrightness(value, source, "Remote brightness");
+    return; // Lamp-only actions never wake / pause / select a motion program.
+  }
+  // Standby is also a local lamp/state command. Do not reject it with motion
+  // commands while Octopus is offline or its capabilities are still unknown.
+  if (event == Event::Standby) {
+    clearDesiredSpiderLoop();
+    cancelStartupAutomation(source, "standby");
+    issueImmediateOverride(source, "standby");
+    standby = true;
+    syncFanModeToOctopus();
+    octopusHomed = false; // Released arms may move: re-home on the next motion.
+    setBrightness(0, source, "Standby");
+    sendToOctopus("M18", source, false);
+    broadcastStatus("Standby. Lamps off and motors released.");
+    broadcastState();
+    return;
+  }
+  if (!octopusRealtime || !octopusFirmwareReady) {
+    broadcastStatus("Remote motion needs the updated Octopus firmware and an active serial connection.");
+    return;
+  }
+  if (event == Event::Next || event == Event::Previous) {
+    const unsigned nextPreset = remote_control::cyclePreset(selectedPreset, event == Event::Next);
+    handleSimpleAction("pos" + String(nextPreset), source);
+    broadcastState();
+    return;
+  }
+  if (event == Event::PlayDoubleTap) {
+    playTapHandled = false;
+    handleSimpleAction("random_position", source);
+    return;
+  }
+  if (event == Event::PlayDown) {
+    playTapHandled = (spiderProgramActive || startupHomeInProgress) && !spiderProgramPaused;
+    if (playTapHandled) {
+      manualSpiderPauseRequested = true;
+      sendToOctopus("M215 P", source, false);
+      broadcastStatus("Motion paused.");
+    }
+    return;
+  }
+  if (event == Event::PlayTap) {
+    if (playTapHandled) { playTapHandled = false; return; }
+    if (spiderProgramPaused && !standby) {
+      manualSpiderPauseRequested = false;
+      sendToOctopus("M215 R", source, false);
+      broadcastStatus("Continuing paused motion.");
+    } else handleSimpleAction("random_position", source);
+    broadcastState();
+  }
+}
+
 void runStartupHomeIfReady() {
   if (!startupHomePending) return;
   if (!octopusOnline) return;
@@ -1223,6 +1347,7 @@ void runStartupHomeIfReady() {
 
 void recoverStartupHomeIfStalled() {
   if (!startupHomeInProgress) return;
+  if (spiderProgramPaused) return;
   if (!startupHomeStartedMs) return;
 
   const uint32_t now = millis();
@@ -1294,6 +1419,12 @@ void handleOctopusLine(const String& rawLine) {
   String line = rawLine;
   line.trim();
   if (!line.length()) return;
+  if (line == "Cap:LUMIAC_REALTIME:1") octopusRealtime = true;
+  if (line == "Cap:LUMIAC_FAN:1") {
+    octopusMotionFan = true;
+    lastFanMode = -1;
+    syncFanModeToOctopus();
+  }
   const String markerLine = line.startsWith("echo:") ? line.substring(5) : line;
   if (markerLine.startsWith("LUMIAC_ACK_")) {
     lastOctopusRxMs = millis();
@@ -1355,12 +1486,16 @@ void handleOctopusLine(const String& rawLine) {
       spiderPauseForAdjustment = false;
   }
 
-  if (line == "Spider homing complete." || line == "Spider grouped homing complete.") {
+  // Updated Marlin reports real endstop completion. The legacy M118 fence also
+  // runs after an intentionally cancelled G28 and must not mark it homed.
+  const bool homeComplete = octopusRealtime ? line == "Continuous six-arm homing complete." :
+    (line == "Spider homing complete." || line == "Spider grouped homing complete.");
+  if (!standby && homeComplete) {
     octopusHomed = true;
     embeddedPlayback.waitingForHome = false;
   }
 
-  if ((line == "Spider homing complete." || line == "Spider grouped homing complete.") && startupHomeInProgress && startupAutoRunPending) {
+  if (homeComplete && startupHomeInProgress && startupAutoRunPending) {
     startupHomeInProgress = false;
     startupHomeStartedMs = 0;
     startupHomeRetryCount = 0;
@@ -1382,6 +1517,18 @@ void pollOctopusState() {
   sendToOctopus("M114", kBoardName, false);
 }
 
+void pollOctopusCapabilities() {
+  if (octopusFirmwareReady && octopusRealtime && octopusMotionFan) return;
+  const uint32_t now = millis();
+  if (now - lastOctopusRecoveryMs < kOctopusRecoveryRetryMs) return;
+  // Do not accumulate queries behind a held or blocking move. Embedded programs
+  // leave a free command slot after each completion marker, even during random.
+  if (startupHomeInProgress || spiderProgramPaused || embeddedPlayback.waitingForHome
+      || embeddedPlayback.waitingForMarker || (spiderProgramActive && !embeddedPlayback.program)) return;
+  lastOctopusRecoveryMs = now;
+  sendToOctopus("M115", kBoardName, false);
+}
+
 void pollRandomCodes() {
   const uint32_t now = millis();
   if (randomCodeCount || now - lastRandomCodeQueryMs < kRandomCodePollMs) return;
@@ -1394,6 +1541,9 @@ void pulseOctopusResetLine(const String& reason) {
 
   octopusOnline = false;
   octopusFirmwareReady = false;
+  octopusRealtime = false;
+  octopusMotionFan = false;
+  lastFanMode = -1;
   octopusHomed = false;
   stopEmbeddedProgram();
   serialLine = "";
@@ -1452,19 +1602,10 @@ void recoverOctopusLink() {
   const uint32_t now = millis();
 
   if (startupAutomationActive() && !octopusFirmwareReady) {
-    if (now - lastOctopusRecoveryMs >= kOctopusRecoveryRetryMs) {
-      lastOctopusRecoveryMs = now;
-      sendToOctopus("M115", kBoardName, false);
-    }
     return;
   }
 
   if (octopusWatchdogSuspended()) return;
-
-  if (!octopusOnline && now - lastOctopusRecoveryMs >= kOctopusRecoveryRetryMs) {
-    lastOctopusRecoveryMs = now;
-    sendToOctopus("M115", kBoardName, false);
-  }
 
   if (now - lastOctopusRxMs < kOctopusSerialReinitMs) return;
   if (now - lastOctopusSerialReinitMs < kOctopusSerialReinitMs) return;
@@ -1739,6 +1880,30 @@ void handleApiState() {
   sendStateResponse();
 }
 
+void handleApiBluetoothState() {
+  JsonDocument doc;
+  bluetooth_remote::state(doc.to<JsonObject>());
+  String body;
+  serializeJson(doc, body);
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", body);
+}
+
+void handleApiBluetoothCommand() {
+  JsonDocument doc;
+  if (deserializeJson(doc, server.arg("plain"))) {
+    server.send(400, "application/json", "{\"ok\":false,\"message\":\"Invalid JSON\"}");
+    return;
+  }
+  String message;
+  const bool ok = bluetooth_remote::command(doc["action"] | "", doc["address"] | "", message);
+  doc.clear();
+  doc["ok"] = ok; doc["message"] = message;
+  String body;
+  serializeJson(doc, body);
+  server.send(ok ? 200 : 409, "application/json", body);
+}
+
 void handleApiCommand() {
   const String body = server.arg("plain");
   JsonDocument doc;
@@ -1840,6 +2005,8 @@ void setupHttp() {
   server.on("/logo.jpg", HTTP_GET, handleLogo);
   server.on("/manifest.webmanifest", HTTP_GET, handleManifest);
   server.on("/api/state", HTTP_GET, handleApiState);
+  server.on("/api/bluetooth", HTTP_GET, handleApiBluetoothState);
+  server.on("/api/bluetooth", HTTP_POST, handleApiBluetoothCommand);
   server.on("/api/command", HTTP_POST, handleApiCommand);
   server.on("/api/log", HTTP_POST, handleApiLog);
   server.onNotFound(handleNotFound);
@@ -1926,6 +2093,7 @@ void setup() {
 
   setupHttp();
   setupWebSocket();
+  bluetooth_remote::begin();
 
   logMessage(kBoardName, String("Access point ready at http://") + WiFi.softAPIP().toString());
   logMessage(kBoardName, "Lamp output delegated to Octopus M355 on the configured bed/heater output.");
@@ -1934,17 +2102,17 @@ void setup() {
 
   delay(300);
   sendToOctopus("M115");
+  lastOctopusRecoveryMs = millis();
   startupHomeReadyMs = 0;
   broadcastState();
 }
 
 void loop() {
-  dnsServer.processNextRequest();
-  server.handleClient();
-  webSocket.loop();
-  pollWiFiStations();
-
+  // Hardware control and capability discovery run before optional browser I/O.
   readOctopusSerial();
+  pollOctopusCapabilities();
+  bluetooth_remote::poll(handleBluetoothEvent, broadcastBluetoothKeys);
+  syncFanModeToOctopus();
   pumpEmbeddedProgram();
   pollRfButtons();
   pollOctopusState();
@@ -1956,6 +2124,11 @@ void loop() {
   recoverOctopusLink();
   healthCheck();
 
+  dnsServer.processNextRequest();
+  server.handleClient();
+  webSocket.loop();
+  pollWiFiStations();
+
   const uint32_t now = millis();
   if (octopusResetVerifyPending && now >= octopusResetVerifyDeadlineMs) {
     octopusResetVerifyPending = false;
@@ -1966,6 +2139,9 @@ void loop() {
   if (octopusOnline && !octopusWatchdogSuspended() && now - lastOctopusRxMs > kOctopusOfflineMs) {
     octopusOnline = false;
     octopusFirmwareReady = false;
+    octopusMotionFan = false;
+    lastFanMode = -1;
+    reachedPreset = 0;
     logMessage(kBoardName, "Octopus serial RX heartbeat timed out.");
     broadcastState();
   }
