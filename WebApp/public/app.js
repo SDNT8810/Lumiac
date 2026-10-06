@@ -1,11 +1,11 @@
 const MOTOR_COUNT = 6;
 const MIN_ANGLE = 0;
-const MAX_ANGLE = 115;
+const MAX_ANGLE = 120;
 const LEG_AXES = ["X", "Y", "Z", "A", "B", "C"];
 const DEFAULT_POSE = [20, 20, 20, 20, 20, 20];
 const SIM_FEED_REFERENCE = 200;
 const FEED_MIN = 10;
-const FEED_MAX = 400;
+const FEED_MAX = 600;
 const BRIGHTNESS_MAX = 255;
 const UI_SCALE_MAX = 100;
 const MAX_LOG_LINES = 300;
@@ -22,7 +22,7 @@ const state = {
   homedAxes: Array(MOTOR_COUNT).fill(false),
   animationFrame: 0,
   sequenceToken: 0,
-  feedRate: 200,
+  feedRate: 305,
   lightsOn: false,
   brightness: 160,
   lastNonZeroBrightness: 160,
@@ -822,7 +822,7 @@ elements.homeButton.addEventListener("click", () => {
 });
 
 createLegControls();
-updateFeedRate(state.feedRate);
+updateFeedRate(feedToUi(state.feedRate));
 updateLampControls(state.brightness, state.lightsOn);
 syncControls();
 layoutLegControls();

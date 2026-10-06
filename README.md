@@ -1,6 +1,6 @@
 # Lumiac
 
-Lumiac is the control stack for a six-axis hexapod/spider robot built around a BIGTREETECH Octopus v1.1 and an ESP32. It includes customized Marlin firmware, the ESP32 Wi-Fi/RF bridge, SD-card motion programs, a browser control panel, and a local motion simulator.
+Lumiac is the control stack for a six-axis hexapod/spider robot built around a BIGTREETECH Octopus v1.1 and an ESP-12S or ESP32 controller. It includes customized Marlin firmware, a Wi-Fi/RF bridge, motion programs embedded in ESP flash, a browser control panel, and a local motion simulator.
 
 > **Hardware warning:** This project controls high-current stepper drivers and moving machinery. Test with the robot raised or the motors disconnected, keep an emergency power cut-off within reach, and verify every pin and current limit before applying motor power.
 
@@ -8,13 +8,13 @@ Lumiac is the control stack for a six-axis hexapod/spider robot built around a B
 
 | Path | Purpose |
 | --- | --- |
-| [`ESP_RF_Octopus`](ESP_RF_Octopus) | ESP32 firmware: Wi-Fi access point, web UI, RF/button inputs, and UART bridge to Marlin |
+| [`ESP_RF_Octopus`](ESP_RF_Octopus) | ESP-12S / ESP32 firmware: Wi-Fi access point, web UI, RF/button inputs, and UART bridge to Marlin |
 | [`Marlin/marlin-2.1.2.6`](Marlin/marlin-2.1.2.6) | Customized Marlin 2.1.2.6 for the BTT Octopus v1.1 and six TMC5160 axes |
-| [`gcodes`](gcodes) | Motion and pose programs copied to the controller's SD card |
+| [`gcodes`](gcodes) | Motion and pose programs embedded in ESP firmware at build time |
 | [`WebApp`](WebApp) | Local browser UI that reads the configured Marlin motion-file map |
 | [`simulator`](simulator) | Standalone browser-based hexapod motion simulator |
 | [`Docs/pinMapping`](Docs/pinMapping) | Wiring, pin, driver, endstop, lamp, and command reference |
-| [`build.py`](build.py) | Builds Marlin and optionally copies `firmware.bin` to an SD card |
+| [`build.py`](build.py) | Builds/uploads either ESP controller, or builds Marlin and copies its firmware to SD; `build.pt` is an alias |
 
 `gcodes_OLD` is retained as reference material. The much larger upstream Marlin configuration-example bundle is intentionally not published because Lumiac does not use it.
 
@@ -24,7 +24,8 @@ Lumiac is the control stack for a six-axis hexapod/spider robot built around a B
 - Git
 - Node.js 18 or newer, only for the local WebApp and simulator
 - A data-capable USB cable and the correct serial-port driver for your board
-- For the complete hardware build: BTT Octopus v1.1, ESP32 DevKit, six correctly configured TMC5160 drivers, endstops, and a FAT32-formatted SD card
+- For the complete hardware build: BTT Octopus v1.1, ESP-12S (ESP8266, 4 MB flash) or ESP32 DevKit, six correctly configured TMC5160 drivers, endstops, and a FAT32-formatted SD card for the initial Octopus firmware flash
+- For ESP-12S flashing: a USB-to-UART programmer with 3.3 V logic and suitable power/boot wiring; the module has no native USB
 
 PlatformIO is pinned in [`requirements.txt`](requirements.txt), so no separate PlatformIO installation is required.
 
@@ -54,33 +55,45 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-## Build and upload the ESP32 firmware
+## Build and upload an ESP controller
 
-Build the `esp32dev` environment:
+ESP-12S replaces the complete ESP32 controller. They are alternatives, not a pair of wireless boards. See [controller wiring and ESP-12S flashing](Docs/esp-controllers.md) before swapping hardware.
 
-```bash
-python -m platformio run -d ESP_RF_Octopus
-```
-
-Upload it, replacing the example port with your ESP32 port:
+Build and upload to the specified serial port:
 
 ```bash
-python -m platformio run -d ESP_RF_Octopus -t upload --upload-port COM4
+python build.py esp12 COM5
+python build.py esp32 COM4
 ```
 
-Open the serial monitor at 115200 baud:
+The requested filename and spelling also work:
 
 ```bash
-python -m platformio device monitor --baud 115200 --port COM4
+python build.pt eps12 COM5
+python build.pt eps32 COM4
 ```
 
-After boot, connect a phone or computer to the ESP32 access point:
+Omit the port for a build without upload, or add `--build-only`:
+
+```bash
+python build.py esp12
+python build.py esp32
+python build.py esp12 COM5 --build-only
+```
+
+The PlatformIO environments are `esp12s` (ESP8266) and `esp32dev`. Their binaries are under `ESP_RF_Octopus/.pio/build/<environment>/firmware.bin`. Each ESP build embeds the current `gcodes/input*.txt` and `gcodes/pos*.txt` files automatically. Editing a motion program requires rebuilding and uploading the chosen ESP firmware; no separate filesystem upload or Octopus SD copy is needed. The helper returns a nonzero exit status on a failed build/upload.
+
+After boot, connect a phone or computer to the selected controller's access point:
 
 - SSID: `ESP_RF_Octopus`
 - Default password: `octopus123`
 - Control page: <http://192.168.4.1>
 
 The access-point credentials are defaults stored in [`ESP_RF_Octopus/src/main.cpp`](ESP_RF_Octopus/src/main.cpp). Change the password before deploying the robot in a public or shared location.
+
+ESP32 USB logs remain available at 115200 baud. ESP-12S logs are available through the web interface: its UART pins are dedicated to Marlin during normal operation.
+
+The original ESP32 also supports the Satechi/POP Multimedia Bluetooth remote through the dashboard's **Bluetooth remote** panel. Scan and pair there, then use volume keys for brightness (2% per tap, 30% per second when held), Next/Back for POS 1–3, Play/Pause for motion, and a 2.5-second Play hold for standby. Pairing needs only the ESP32; lamp and motion control require the updated ESP32 and Octopus firmware. See [Bluetooth setup, controls and verification](Docs/bluetooth-remote.md).
 
 ## Build and flash the Octopus firmware
 
@@ -89,6 +102,10 @@ The root helper builds the `STM32F446ZE_btt` environment:
 ```bash
 python build.py
 ```
+
+`python build.py marlin --build-only` compiles Marlin without modifying an SD card. Running the helper without arguments retains the original build-and-copy behavior.
+
+The optional `python build.pt marlin-max --build-only` builds the **256-microstep / 3.0 A RMS test profile**, with separate output at `Marlin/marlin-2.1.2.6/.pio/build/STM32F446ZE_btt_max_power/firmware.bin`. The normal build also uses 256 microsteps, with 2.5 A RMS run current. See [driver tuning](Docs/driver-tuning.md) for cooling requirements and the motion settings.
 
 On Windows it also looks for an SD card at `E:\`. To use another mounted path, set `OCTOPUS_SD_ROOT` before running it:
 
@@ -111,11 +128,13 @@ To flash the board:
 
 1. Format an SD card as FAT32.
 2. Copy the generated file to the SD-card root as `firmware.bin`.
-3. Copy the repository's `gcodes` directory to `/gcodes` on the same card.
-4. Turn off the Octopus board, insert the card, and power it on.
-5. Confirm that the board renamed `firmware.bin` to `FIRMWARE.CUR`.
+3. Turn off the Octopus board, insert the card, and power it on.
+4. Confirm that the board renamed `firmware.bin` to `FIRMWARE.CUR`.
+5. Turn off the Octopus, remove the SD card, and power it on again. The ESP supplies the motion programs over UART.
 
-This is not stock Marlin. It contains the six-axis configuration and custom `M215` motion-file commands required by Lumiac. Building an unmodified Marlin checkout will not provide the same behavior.
+This is not stock Marlin. It contains the required six-axis configuration. Its legacy `M215` SD-file commands still require an SD card when sent directly to the Octopus USB port; the ESP handles dashboard, RF, and ESP-terminal `M215` commands locally and streams ordinary G-code to Marlin.
+
+Full homing (`G28` or `G28 X Y Z A B C`, including the ESP Home button and startup home) starts all six arms together at 160 mm/min per arm. Each motor stops at its own MIN endstop while the others continue the same move. There is one approach with no second bump; only arms already on an endstop first back off 2 mm to verify switch release. All six switches must be reached before positions are marked homed. A single-axis command such as `G28 X` retains standard individual homing. This behavior requires flashing the updated **Octopus** firmware; an ESP upload alone cannot change Marlin's homing routine.
 
 ## Run the browser tools
 
@@ -154,15 +173,18 @@ PORT=3001 npm start
 
 ## Hardware overview
 
-- The ESP32 communicates with the Octopus over a 115200-baud UART link.
+- The selected ESP controller communicates with the Octopus over a 115200-baud UART link.
 - The Octopus firmware exposes six motion axes as `X Y Z A B C`.
-- `M215` selects, pauses, resumes, or stops motion programs stored under `/gcodes` on the SD card.
+- The ESP handles `M215` selections and pause/resume/stop controls for programs stored in its flash, then streams G-code to the Octopus over UART. The Octopus needs no SD card for normal operation through the ESP.
 - `M355` controls the lamp through the Octopus bed/heater MOSFET output; this configuration does not use a heated bed.
-- The ESP32 reset connection must be open-drain/active-low. Never drive the Octopus reset pin high.
+- FAN0 automatically runs at 30% while idle or paused, 80% during normal movement, and 100% during random movement. Holding Bluetooth Play/Pause for 2.5 seconds enters standby and turns both FAN0 and the lamps off. Flash both the ESP and Octopus firmware for this behavior; see [FAN0 setup](Docs/bluetooth-remote.md#fan0-cooling).
+- The controller's Octopus reset connection is open-drain/active-low. ESP-12S boot/programming constraints are described in [the wiring guide](Docs/esp-controllers.md).
 
 See [`Docs/pinMapping`](Docs/pinMapping) before connecting any hardware. Treat the firmware source as the final authority if documentation and code differ.
 
 ## Troubleshooting
+
+For weak movement, noisy random programs, or hot drivers, see [driver cooling and motion tuning](Docs/driver-tuning.md). It includes the normal and higher-current build profiles, microstep comparisons up to 256, and the quiet random-motion acceleration profile.
 
 - **`No module named platformio`:** activate the virtual environment and run `python -m pip install -r requirements.txt`.
 - **Marlin project not found:** confirm that `Marlin/marlin-2.1.2.6/platformio.ini` exists.

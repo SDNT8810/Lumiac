@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Lumiac | Media remote</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,sans-serif;color:#e8eef7;background:#0b1019}
+*{box-sizing:border-box}body{margin:0;padding:28px 18px}.wrap{max-width:1000px;margin:auto}
+header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:24px}
+h1{font-size:28px;letter-spacing:-1px;margin:0}h2{font-size:16px;margin:0 0 16px}p{line-height:1.5}
+.muted,small{color:#9caec4}.eyebrow{font-size:11px;letter-spacing:2px;color:#67b7ff;text-transform:uppercase;margin-bottom:6px}
+.card{background:#121c2b;border:1px solid #273449;border-radius:16px;padding:20px;margin:14px 0}
+.badge{border:1px solid #435069;border-radius:20px;padding:7px 12px;font-size:12px;font-weight:700;white-space:nowrap}
+.good{color:#7ce6b7;border-color:#397762}.pending{color:#ffd17c;border-color:#7d653f}
+#message{margin-bottom:0}#error{background:#3d1e2b;border:1px solid #a04a63;color:#ffbdce;padding:12px;border-radius:10px;margin-top:14px}
+[hidden]{display:none!important}.keys{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.key{padding:18px 8px;text-align:center;border:1px solid #334459;border-radius:12px;background:#0c1420;transition:background .12s,border-color .12s}
+.key.active{background:#173e3a;border-color:#7ce6b7}.key.hold{background:#443821;border-color:#ffd17c}
+.symbol{font-size:29px;font-weight:650;min-height:42px}.key-name{font-size:12px;color:#b5c5d9}.key-state{font-size:12px;font-weight:700;margin:10px 0 4px;min-height:18px}.counts{font-size:11px;color:#9caec4}
+.latest{display:flex;justify-content:space-between;gap:12px;margin-top:20px;align-items:baseline}.latest strong{font-size:20px}.controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+button{font:inherit;font-size:13px;font-weight:650;cursor:pointer;border:1px solid #44628c;background:#234e85;color:white;padding:9px 14px;border-radius:8px}
+button.secondary{background:#202d40;border-color:#42526c}button:disabled{opacity:.4;cursor:default}button:hover:enabled{filter:brightness(1.2)}button:focus-visible{outline:2px solid #8fc8ff;outline-offset:3px}
+table{width:100%;border-collapse:collapse;text-align:left;font-size:13px}td,th{padding:10px 6px;border-bottom:1px solid #273449}th{color:#9caec4;font-weight:500}code{font-size:12px;overflow-wrap:anywhere}.table-wrap{overflow:auto}.columns{display:grid;grid-template-columns:1fr 1fr;gap:14px}.columns .card{margin:0}
+#events{list-style:none;padding:0;margin:0;max-height:320px;overflow:auto}.event{display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid #273449;padding:11px 0;font-size:13px}.event small{display:block;margin-top:3px}
+#raw{display:block;background:#0b1019;border-radius:8px;padding:12px;min-height:42px}#logs{white-space:pre-wrap;overflow:auto;max-height:250px;font:11px/1.6 ui-monospace,monospace;color:#b0bfd3}summary{cursor:pointer;font-size:13px}.note{font-size:12px}
+@media(max-width:650px){body{padding:18px 12px}.card{padding:15px}.keys{gap:5px}.key{padding:14px 3px}.symbol{font-size:23px}.key-name{font-size:10px}.counts{font-size:10px}.columns{grid-template-columns:1fr}.latest{display:block}.latest strong{display:block;margin-top:7px}header{align-items:flex-start}h1{font-size:24px}}
+</style>
+</head>
+<body><main class="wrap">
+<header><div><div class="eyebrow">Lumiac / Bluetooth HID</div><h1>Media remote</h1></div><span id="status" class="badge" role="status">Loading</span></header>
+<section class="card"><h2>Connection</h2><div id="peer" class="muted">ESP32 Wi-Fi: Lumiac · 192.168.4.1</div><p id="message">Connecting to the dashboard…</p><div id="error" role="alert" hidden></div></section>
+<section class="card"><h2>Five keys. Every gesture.</h2><div class="keys" id="keys"></div>
+<div class="latest"><small>LAST GESTURE</small><strong id="last-key" aria-live="polite">Waiting for a key</strong></div>
+<p class="muted note">Tap for PRESS. Keep a key down for <span id="threshold">650</span> ms for HOLD; release to see the duration. Hold detection depends on the remote sending key-down and release reports.</p></section>
+<section class="card"><h2>Pair your remote</h2><div class="controls"><button id="scan" disabled>Scan devices</button><button id="disconnect" class="secondary" disabled>Disconnect / cancel</button></div>
+<p class="muted note">Put the remote in pairing mode and keep it awake. Disconnect it from your phone first. An unnamed remote may appear as “Unknown”; match its address before selecting Connect.</p>
+<div class="table-wrap"><table><thead><tr><th>Device</th><th>Address</th><th>Signal</th><th></th></tr></thead><tbody id="devices"></tbody></table></div></section>
+<div class="columns"><section class="card"><h2>Button history</h2><p id="no-events" class="muted note">Quick taps are kept here, even between screen updates.</p><ol id="events"></ol></section>
+<section class="card"><h2>Capture details</h2><p id="capture" class="muted note">Waiting for reports</p><code id="raw">—</code><p class="muted note">Raw HID includes both button-down and release packets. Unmapped reports remain visible for diagnosis.</p><details><summary>Connection and report log</summary><pre id="logs"></pre></details></section></div>
+</main>
+<script>
+const definitions=[['volume_up','+','Volume up'],['volume_down','−','Volume down'],['next','▶|','Next'],['back','|◀','Back'],['play_pause','▶ / Ⅱ','Play / pause']];
+const $=id=>document.getElementById(id);
+let actionError='',actionBusy=false,state=null,deviceSignature='',lastSeq=0,lastUptime=0;
+const flashes=new Map(),lastActions=new Map();
+for(const [id,symbol,name] of definitions){
+  const card=document.createElement('div');card.className='key';card.id='key-'+id;
+  for(const [cls,text] of [['symbol',symbol],['key-name',name],['key-state','READY'],['counts','0 presses · 0 holds']]){
+    const el=document.createElement('div');el.className=cls;el.textContent=text;card.append(el);
+  }$('keys').append(card);
+}
+async function api(url,method='GET'){
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),6000);
+  try{
+    const response=await fetch(url,{method,cache:'no-store',signal:controller.signal});
+    const data=await response.json();
+    if(!response.ok||data.ok===false)throw new Error(data.message||('HTTP '+response.status));
+    return data;
+  }finally{clearTimeout(timer)}
+}
+async function action(url){
+  if(actionBusy)return;
+  actionBusy=true;actionError='';if(state)render(state);
+  try{const result=await api(url,'POST');$('message').textContent=result.message;}
+  catch(error){actionError=error.message;}
+  finally{actionBusy=false;deviceSignature='';if(state)render(state);}
+}
+$('scan').addEventListener('click',()=>action('/api/scan'));
+$('disconnect').addEventListener('click',()=>action('/api/disconnect'));
+function render(s){
+  const reset=s.uptime_ms<lastUptime;lastUptime=s.uptime_ms;
+  if(reset){lastSeq=0;flashes.clear();lastActions.clear();}
+  $('status').textContent=s.connected?'CONNECTED':s.connecting?'CONNECTING':s.scanning?'SCANNING':'NOT CONNECTED';
+  $('status').className='badge '+(s.connected?'good':s.connecting?'pending':'');
+  $('peer').textContent=s.peer?'Remote: '+s.peer:'ESP32 Wi-Fi: Lumiac · 192.168.4.1';
+  $('message').textContent=s.message||'';
+  $('error').textContent=actionError||s.error||'';$('error').hidden=!$('error').textContent;
+  $('threshold').textContent=s.hold_ms;
+  $('last-key').textContent=s.last_key;$('raw').textContent=s.last_raw;
+  $('scan').disabled=actionBusy||!s.bt_ready||s.scanning||s.connecting||s.connected;
+  $('disconnect').disabled=actionBusy||(!s.connected&&!s.connecting);
+  const events=s.events||[];
+  for(const event of events){
+    if(event.seq>lastSeq){lastActions.set(event.key,event.action==='HOLD END'?'HOLD':event.action);flashes.set(event.key,Date.now()+1100);}
+    lastSeq=Math.max(lastSeq,event.seq);
+  }
+  for(const button of s.buttons||[]){
+    const card=$('key-'+button.id);if(!card)continue;
+    const recent=Date.now()<(flashes.get(button.id)||0);
+    card.className='key'+(button.down||recent?' active':'')+(button.held?' hold':'');
+    card.querySelector('.key-state').textContent=button.down?(button.held?'HOLD ':'DOWN ')+button.duration_ms+' ms':lastActions.get(button.id)||'READY';
+    card.querySelector('.counts').textContent=button.presses+' presses · '+button.holds+' holds';
+  }
+  const signature=JSON.stringify([s.devices,s.connected,s.connecting,s.bt_ready,actionBusy]);
+  if(signature!==deviceSignature){
+    deviceSignature=signature;$('devices').replaceChildren();
+    for(const device of s.devices||[]){
+      const row=document.createElement('tr');
+      for(const value of [device.name,device.mac,device.rssi+' dBm']){const cell=document.createElement('td');cell.textContent=value;row.append(cell);}
+      const cell=document.createElement('td'),button=document.createElement('button');button.textContent='Connect';
+      button.setAttribute('aria-label','Connect '+device.name+' '+device.mac);
+      button.disabled=actionBusy||!s.bt_ready||s.connected||s.connecting;
+      button.addEventListener('click',()=>action('/api/connect?mac='+encodeURIComponent(device.mac)));
+      cell.append(button);row.append(cell);$('devices').append(row);
+    }
+    if(!(s.devices||[]).length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=4;cell.textContent='No devices yet. Put the remote in pairing mode, then scan.';row.append(cell);$('devices').append(row);}
+  }
+  const completed=events.filter(event=>['PRESS','HOLD END','CANCELLED'].includes(event.action));
+  $('events').replaceChildren();$('no-events').hidden=completed.length>0;
+  for(const event of [...completed].reverse()){
+    const row=document.createElement('li');row.className='event';
+    const name=document.createElement('div');name.textContent=event.name;
+    const time=document.createElement('small');time.textContent=(event.time_ms/1000).toFixed(1)+' s after boot';name.append(time);
+    const value=document.createElement('span');value.textContent=(event.action==='HOLD END'?'HOLD':event.action)+' · '+event.duration_ms+' ms';row.append(name,value);$('events').append(row);
+  }
+  $('capture').textContent=s.reports+' reports · '+s.decoded_reports+' decoded · '+s.descriptor_bytes+' descriptor bytes · '+s.mapped_fields+' media fields';
+  $('logs').textContent=(s.logs||[]).join('\n');
+}
+async function refresh(){
+  try{state=await api('/api/state');render(state);}
+  catch(error){$('status').textContent='DASHBOARD OFFLINE';$('error').hidden=false;$('error').textContent='Cannot reach ESP32: '+error.message;$('scan').disabled=true;$('disconnect').disabled=true;}
+  finally{setTimeout(refresh,document.hidden?1000:250)}
+}
+refresh();
+</script></body></html>

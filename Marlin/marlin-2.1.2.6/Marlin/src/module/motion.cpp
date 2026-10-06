@@ -32,6 +32,9 @@
 #include "../gcode/gcode.h"
 #include "../lcd/marlinui.h"
 #include "../inc/MarlinConfig.h"
+#if ENABLED(SPIDER_CONCURRENT_HOMING)
+  #include "../MarlinCore.h"
+#endif
 
 #if IS_SCARA
   #include "../libs/buzzer.h"
@@ -2283,6 +2286,91 @@ void prepare_line_to_destination() {
     if (DEBUGGING(LEVELING)) DEBUG_ECHOLNPGM("<<< homeaxis(", C(AXIS_CHAR(axis)), ")");
 
   } // homeaxis()
+
+  #if ENABLED(SPIDER_CONCURRENT_HOMING)
+
+    static uint8_t spider_pressed_endstops() {
+      constexpr EndstopEnum switches[] = { X_MIN, Y_MIN, Z_MIN, I_MIN, J_MIN, K_MIN };
+      const auto state = endstops.state();
+      uint8_t pressed = 0;
+      LOOP_NUM_AXES(a) if (TEST(state, switches[a])) SBI(pressed, a);
+      return pressed;
+    }
+
+    void home_spider_group() {
+      SERIAL_ECHOLNPGM("Starting continuous six-arm homing.");
+      planner.synchronize();
+      const uint32_t stop_count = planner.quick_stop_count;
+      const auto cancelled = [stop_count]() {
+        if (planner.quick_stop_count == stop_count) return false;
+        SERIAL_ECHOLNPGM("Six-arm homing cancelled.");
+        return true;
+      };
+      LOOP_NUM_AXES(a) set_axis_never_homed(AxisEnum(a));
+      endstops.hit_on_purpose();
+
+      feedRate_t fr = homing_feedrate(X_AXIS);
+      LOOP_NUM_AXES(a) fr = _MIN(fr, homing_feedrate(AxisEnum(a)));
+
+      // Establish a temporary machine origin. No G-code offsets or software
+      // travel limits are applied to homing moves, just as in do_homing_move.
+      abce_pos_t target{0};
+      planner.set_machine_position_mm(target);
+      const uint8_t pressed = spider_pressed_endstops();
+      if (pressed) {
+        LOOP_NUM_AXES(a) if (TEST(pressed, a)) target[a] = SPIDER_HOME_RELEASE_MM;
+        PlannerHints release_hints;
+        release_hints.millimeters = SPIDER_HOME_RELEASE_MM;
+        planner.buffer_segment(target, fr, active_extruder, release_hints);
+        planner.synchronize();
+        if (cancelled()) return; // An intentional remote stop is not an endstop fault.
+        LOOP_NUM_AXES(a) {
+          if (TEST(pressed, a) && ABS(planner.get_axis_position_mm(AxisEnum(a)) - target[a]) > planner.mm_per_step[a]) {
+            SERIAL_ERROR_MSG("Six-arm homing: release move interrupted.");
+            kill(GET_TEXT_F(MSG_KILL_HOMING_FAILED));
+            return;
+          }
+        }
+        endstops.enable(true); // Resample and wait for any configured debounce.
+        if (spider_pressed_endstops()) {
+          SERIAL_ERROR_MSG("Six-arm homing: endstop did not release.");
+          kill(GET_TEXT_F(MSG_KILL_HOMING_FAILED));
+          return;
+        }
+      }
+
+      target.reset();
+      planner.set_machine_position_mm(target);
+      PlannerHints seek_hints;
+      LOOP_NUM_AXES(a) {
+        const float distance = 1.5f * max_length(AxisEnum(a));
+        target[a] = -distance;
+        seek_hints.millimeters = _MAX(seek_hints.millimeters, distance);
+      }
+      // Explicit path length keeps each equal-stroke arm at its homing speed rather
+      // than slowing XYZ by the diagonal's square-root-of-three factor.
+      endstops.hit_on_purpose();
+      stepper.begin_spider_homing();
+      planner.buffer_segment(target, fr, active_extruder, seek_hints);
+      planner.synchronize();
+      const uint8_t stopped = stepper.end_spider_homing();
+      endstops.hit_on_purpose();
+
+      if (cancelled()) return;
+
+      if (!spider_homing::complete(stopped)) {
+        SERIAL_ERROR_MSG("Six-arm homing: not all endstops reached.");
+        kill(GET_TEXT_F(MSG_KILL_HOMING_FAILED));
+        return;
+      }
+
+      LOOP_NUM_AXES(a) set_axis_is_at_home(AxisEnum(a));
+      sync_plan_position();
+      destination = current_position;
+      SERIAL_ECHOLNPGM("Continuous six-arm homing complete.");
+    }
+
+  #endif // SPIDER_CONCURRENT_HOMING
 
 #endif // HAS_ENDSTOPS
 

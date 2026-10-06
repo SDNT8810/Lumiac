@@ -266,7 +266,7 @@ void GcodeSuite::G28() {
   reset_stepper_timeout();
 
   #define HAS_CURRENT_HOME(N) (defined(N##_CURRENT_HOME) && N##_CURRENT_HOME != N##_CURRENT)
-  #if HAS_CURRENT_HOME(X) || HAS_CURRENT_HOME(X2) || HAS_CURRENT_HOME(Y) || HAS_CURRENT_HOME(Y2) || (ENABLED(DELTA) && HAS_CURRENT_HOME(Z)) || HAS_CURRENT_HOME(I) || HAS_CURRENT_HOME(J) || HAS_CURRENT_HOME(K) || HAS_CURRENT_HOME(U) || HAS_CURRENT_HOME(V) || HAS_CURRENT_HOME(W)
+  #if HAS_CURRENT_HOME(X) || HAS_CURRENT_HOME(X2) || HAS_CURRENT_HOME(Y) || HAS_CURRENT_HOME(Y2) || (ANY(DELTA, SPIDER_CONCURRENT_HOMING) && HAS_CURRENT_HOME(Z)) || HAS_CURRENT_HOME(I) || HAS_CURRENT_HOME(J) || HAS_CURRENT_HOME(K) || HAS_CURRENT_HOME(U) || HAS_CURRENT_HOME(V) || HAS_CURRENT_HOME(W)
     #define HAS_HOMING_CURRENT 1
   #endif
 
@@ -294,7 +294,7 @@ void GcodeSuite::G28() {
       stepperY2.rms_current(Y2_CURRENT_HOME);
       if (DEBUGGING(LEVELING)) debug_current(F(STR_Y2), tmc_save_current_Y2, Y2_CURRENT_HOME);
     #endif
-    #if HAS_CURRENT_HOME(Z) && ENABLED(DELTA)
+    #if HAS_CURRENT_HOME(Z) && ANY(DELTA, SPIDER_CONCURRENT_HOMING)
       const int16_t tmc_save_current_Z = stepperZ.getMilliamps();
       stepperZ.rms_current(Z_CURRENT_HOME);
       if (DEBUGGING(LEVELING)) debug_current(F(STR_Z), tmc_save_current_Z, Z_CURRENT_HOME);
@@ -411,6 +411,13 @@ void GcodeSuite::G28() {
     // 'R' to specify a specific raise. 'R0' indicates no raise, e.g., for recovery.resume
     // When 'R0' is used, there should already be adequate clearance, e.g., from homing Z to max.
     const bool seenR = parser.seenval('R');
+    #if ENABLED(SPIDER_CONCURRENT_HOMING)
+      if (home_all) {
+        home_spider_group();
+        TERN_(IMPROVE_HOMING_RELIABILITY, end_slow_homing(saved_motion_state));
+      }
+      else
+    #endif
       {
         // Z may home first, e.g., when homing away from the bed
         TERN_(HOME_Z_FIRST, if (doZ) homeaxis(Z_AXIS));
@@ -587,7 +594,7 @@ void GcodeSuite::G28() {
     #if HAS_CURRENT_HOME(Y2)
       stepperY2.rms_current(tmc_save_current_Y2);
     #endif
-    #if HAS_CURRENT_HOME(Z) && ENABLED(DELTA)
+    #if HAS_CURRENT_HOME(Z) && ANY(DELTA, SPIDER_CONCURRENT_HOMING)
       stepperZ.rms_current(tmc_save_current_Z);
     #endif
     #if HAS_CURRENT_HOME(I)

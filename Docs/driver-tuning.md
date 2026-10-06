@@ -1,0 +1,204 @@
+# Driver cooling, torque, and noise
+
+## Octopus-only 30% motion reduction
+
+The current Octopus firmware applies **70% of the planned speed and acceleration** to every move, including random programs, POS, manual moves and homing. Updating the ESP32 is unnecessary. `LUMIAC_MOTION_PERCENT` in `Configuration.h` sets this factor; it is applied after the motion planner's axis limits, before the acceleration profile is calculated.
+
+This also applies to the existing ESP's `M201`, `M204`, `M220` and per-move `F` commands. For example, an effective feed of 300 mm/min becomes 210 mm/min, travel acceleration 15 becomes 10.5 mm/s2, the random file's acceleration 8 becomes 5.6 mm/s2, and homing at 160 becomes 112 mm/min. Short moves may never reach their requested cruise speed. Coordinates, steps/mm, driver current, lights, fan duties and remote functions retain their existing settings.
+
+The dashboard and `M503` continue to display requested values; Octopus applies the reduction internally. EEPROM resets are not required, and repeated program starts or `M501` do not remove or compound the reduction. Both normal and `marlin-max` builds include it; use the same current profile as the installed firmware.
+
+Build the normal profile with `python build.py marlin --build-only`, then copy `Marlin/marlin-2.1.2.6/.pio/build/STM32F446ZE_btt/firmware.bin` to the Octopus microSD root as `firmware.bin`. Power-cycle Octopus and verify the card file is renamed `FIRMWARE.CUR`. First check the reduced movement with the lamps supported: a 30% reduction has not been physically validated against the reported dropping problem.
+
+## Current Octopus torque and step-pulse profile (2026-10-06)
+
+The user reports cooling now keeps the assembly below 40 C, motors rated for 10 A, and motor wires soldered directly after arcing at the L6 socket. L6's driver is to be replaced. These are reported hardware conditions; the firmware has not been physically tested on the mechanism.
+
+Both `marlin` and the compatibility target `marlin-max` now use:
+
+| Setting | Value |
+| --- | --- |
+| Commanded microsteps, all six axes | 32 |
+| Driver interpolation | To 256 |
+| Steps/mm, all six axes | 1066.66 |
+| Running current | 3000 mA RMS |
+| Homing current | 2500 mA RMS |
+| Nominal holding current after a run | About 1250 mA RMS |
+| Driver mode | SpreadCycle |
+| Planned speed and acceleration | Existing 70% factor |
+| Thermal warnings/current reduction/error stop | Enabled |
+
+The previous normal build used 256 commanded microsteps and 8533.28 steps/mm. Both values are divided by eight together, preserving the physical distance, speed and acceleration for the same commands. This reduces externally commanded step pulses by eight; it does not multiply running torque. Interpolation remains enabled for driver-generated intermediate steps. See [Analog Devices on MicroPlyer](https://support.analog.com/en-us/knowledgebase/article/KA-15726).
+
+Running current rises from 2.5 A to 3 A RMS. The hold multiplier is adjusted to 0.416666667 so nominal holding current after a run remains approximately 1.25 A. Driver current quantization applies. Homing stays at 2.5 A; its holding current uses the same multiplier. BTT lists a 3 A maximum for the TMC5160T Pro module base connection, so the motor's reported 10 A capability is not used as the board/module current ceiling. [BTT specification](https://global.bttwiki.com/TMC5160T%20Pro%20V1.0.html).
+
+The normal build has EEPROM settings disabled, so old saved steps/mm do not survive reboot. The ESP launcher and embedded programs contain no M92/M350 overrides; ESP32 does not need updating. Coordinates, 0-120 mm travel limits, fan/light control and remote behavior are unchanged. The idle release timeout and immediate pause/resume implementation are also unchanged; this profile addresses continuous-motion current and pulse demand, not those separate behaviors.
+
+Build with `python build.py marlin --build-only`. Copy `Marlin/marlin-2.1.2.6/.pio/build/STM32F446ZE_btt/firmware.bin` to the Octopus microSD root as `firmware.bin`, power-cycle, and verify it becomes `FIRMWARE.CUR`. Re-home before checking short supported movements, then POS and random. A higher-current profile cannot repair a driver damaged by prior arcing, and this tuning is not proof that missed steps are resolved.
+
+The `marlin-max` target is retained for existing build commands and now produces the same settings as `marlin`. Compile-time guards reject configured running or homing current above 3000 mA; manually entered M906 values are not clamped by those guards.
+
+## Historical investigations
+
+The notes below describe earlier configurations and heating reports. They are retained as investigation history, not the current build specification. Cooling has since been added, and the current profile is listed above.
+
+## Follow-up: random motion at 95-110 C
+
+After the ESP controller replacement, the user reports working controls but driver temperatures of 95-110 C during random motion, below 90 C during presets, and more noise in random mode. Whether forced airflow has since been added, the installed microstep setting, and the noise character still need confirmation. The ESP firmware replacement does not change Marlin's driver current or chopper mode.
+
+Continuous random movement keeps run current active. After a preset stops, this TMC5160 initialization waits about two seconds before reducing toward the configured half-current hold setting. This explains a likely duty-cycle contribution to the temperature difference; it does not establish that either measured temperature is acceptable for the actual module. Reversals and different per-axis speeds are additional noise candidates.
+
+For the existing web terminal, the following comparison needs no new firmware:
+
+1. Stop using the UI **Stop** button, support the arms as needed, and let the drivers cool. Establish direct airflow over every driver before another loaded run. If airflow is already present, check heatsink contact and whether hot air is being trapped or recirculated. Do not deliberately run the assembly back to 95-110 C to collect data.
+2. Read the installed settings and warning history with `M906`, `M569`, `M122`, and `M911`. Save the output. Do not clear thermal flags or override current that has been reduced by thermal protection.
+3. Keep microsteps, current, speed, and the selected random program unchanged for the first noise comparison. While stopped, send:
+
+   ```gcode
+   M400
+   M569 S1 X Y Z A B C
+   G4 P1000
+   M569
+   ```
+
+   These commands select StealthChop and report the mode; they do not start motion. Confirm all six axes report StealthChop, then use the same random program and speed for a short, supported comparison. Stop if force drops, movement stalls, or abnormal heating returns. The next random launch retains this chopper choice in the current Marlin source; rebooting the Octopus restores SpreadCycle.
+4. To return to SpreadCycle, use UI **Stop**, wait for the mechanism to stop, then send:
+
+   ```gcode
+   M400
+   M569 S0 X Y Z A B C
+   M569
+   ```
+
+StealthChop targets electrical motor noise; it does not repair a loose gearbox, binding, or a stalled motor, and quieter sound does not prove adequate cooling. Its usable torque depends on the motor, load, and rate of acceleration. See [Analog Devices' comparison](https://www.analog.com/en/resources/app-notes/an-015.html).
+
+If cooling alone is insufficient, a lower run current needs a separate supported test within the motor rating. For example, 2.0 A versus the source's 2.5 A reduces the resistive loss component by about 36%, with reduced available torque. A numeric current change is not included in the noise-comparison commands because the motor rating and any live thermal current reduction are still unknown. Do not decrease holding torque with unsupported arms. A continuous-duty current must be established by temperature and load testing, not by the PSU wattage or microstep count.
+
+## Normal build configuration and reported hardware
+
+The user reports a **24 V, 1000 W supply, no driver fan, and temperatures reaching 120 C** measured with an external instrument. Stop loaded operation, support the arms before removing power if they can drop, and let the drivers cool. Fit correctly mounted heatsinks and forced airflow across all six modules before loaded comparisons. A fan must run whenever the drivers are energized, including while holding still.
+
+The normal `marlin` build configures the following; the separate test profile is listed above. Diagnostic commands below check what the installed firmware actually uses:
+
+| Setting | Source default |
+| --- | --- |
+| Controller | BTT Octopus v1.1 (not Octopus Pro) |
+| Drivers | Six TMC5160 in SPI mode; X Y Z A B C |
+| Run / homing current | 2500 mA RMS on every axis |
+| Hold current multiplier | 0.5 (nominally about 1250 mA RMS) |
+| Current sense resistor | 0.075 ohm on every axis; verify against the actual module |
+| Microsteps | 256; interpolation enabled |
+| Chopper | SpreadCycle, 24 V timing; automatic hybrid switching disabled |
+| Thermal monitoring | Enabled; persistent overtemperature warnings reduce current in 50 mA steps |
+| Motion profile via M215 | Per-axis acceleration cap 50 mm/s2; travel acceleration 15 mm/s2 |
+| Motion smoothing | S-curve enabled; junction deviation 0.003 mm |
+
+The firmware driver type cannot distinguish a particular commercial "Pro" module. The motor ratings and module labels/revisions remain unconfirmed. BTT lists the **TMC5160T Pro** at 3.1 A RMS / 4.4 A peak, with a 0.075-ohm sense resistor. This is a module specification, not a safe continuous current for this uncooled assembly or an unidentified motor. Do not enter 4400 into M906: Marlin takes RMS milliamps. See [BTT's module specifications](https://neo.bttwiki.com/en/docs/accessories-docs/tmc-driver/tmc-5160-t-pro/).
+
+## Where more usable torque can come from
+
+Cooling is the first change. Marlin can reduce current when it receives persistent thermal warnings, so overheating may already be reducing available torque. Confirm this with logs rather than assuming it has happened. Do not disable thermal protection or repeatedly restore current while a warning remains active.
+
+The TMC5160's internal prewarning is nominally 120 C, with thermal shutdown at a higher selectable temperature. An external heatsink/MOSFET measurement is not the IC junction temperature, and the external power transistors are not individually monitored by this sensor. Do not use the absence of an M911 warning as proof that the module is cool. See the [TMC5160/A datasheet, sections 3 and 11](https://www.analog.com/media/en/technical-documentation/data-sheets/TMC5160A_datasheet_rev1.18.pdf).
+
+After cooling, verify the motor current rating (including peak/RMS conventions), module revision, sense resistor, connectors, and temperatures under sustained load before choosing a current ceiling. The normal build retains 2500 mA; it is **not validated as safe for the unknown motors**. The optional test build requests 3000 mA only when that firmware is installed. Building either profile does not flash the controller.
+
+For perspective, increasing current from 2.5 A to 3.0 A would give at most roughly 20% extra torque before magnetic saturation, while resistive losses rise by about 44%: `(3.0 / 2.5)^2 = 1.44`. Reducing from 2.5 A to 2.0 A reduces the resistive component of heating by about 36%, but also reduces torque. These are comparisons, not instructions to apply either current without checking the ratings.
+
+Reduce moving weight, friction, or binding; counterbalance gravity loads; or use more mechanical reduction if additional force is needed. These reduce required motor torque. With this fixed-current configuration, making the robot lighter alone does not automatically lower winding current or driver heating: it creates room to reduce the programmed current. Keep enough holding torque to prevent the arms dropping.
+
+## Supply voltage
+
+Keep this Octopus v1.1 installation at **24 V**. The board's supply support is 12/24 V; the higher voltage rating of a Pro driver does not upgrade the motherboard, capacitors, fans, or lamp circuit. See [BTT's Octopus specifications](https://global.bttwiki.com/Octopus.html).
+
+A 1000 W supply is a capacity rating, not the power forced into the motors. Supply current and motor phase current are different. Raising supply voltage can improve torque at higher motor speed, but a current-regulated driver still regulates winding current to its setting. It does not halve winding current or its I-squared-R heating; some driver losses can increase. Voltage is not the remedy for this overheating. See [STEPPERONLINE's drive-voltage explanation](https://help.omc-stepperonline.com/hc/s/articles/the-effect-of-voltage-on-the-performance-of-stepper-motors).
+
+## Why random motion can sound different
+
+There is no separate random-mode current, microstep, or chopper setting in this source. POS1/POS2 and random launches all apply the same M215 acceleration profile.
+
+The active loop in every current `gcodes/input*.txt` file has 239 moves: 120 along the original irregular route and 119 retracing it to the start. The trajectory spans the full 0–120 mm on each axis. The ESP handles `@LOOP` locally and logs each restart. Each pose file has one straight coordinated move and then stops. Continuous random operation also keeps run current active instead of settling to reduced hold current.
+
+There is also a speed difference in the ESP32 path:
+
+- The UI defaults to 50 (305 mm/min) with a maximum of 600 mm/min. For an ESP-streamed program, the bridge sends `G1 F600` and `M220 S51` at that default.
+- Pose files contain no F command, so their requested coordinated feed is effectively 306 mm/min at that default (600 × 51%).
+- Every random file explicitly sets `F338`, so its requested coordinated feed becomes about 172 mm/min at that default (338 × 51%). This is 30% above the previous programmed `F260` before the dashboard override.
+
+These are path feedrates, not the speed of every arm; acceleration and segment geometry also affect each axis. The Marlin per-axis limit is 390 mm/s (up from 260 mm/s), while homing uses 160 mm/min on each axis (50% below the previous 320 mm/min). Full six-arm homing now uses one continuous concurrent approach: motors stop independently at their switches, without a second bump. Initially pressed switches first release by 2 mm. Individual-axis homing retains the 80 mm/min second approach and bump divisor of 2. The random path is longer because it uses the full stroke, so its total loop time may not fall even with a higher programmed feedrate.
+
+## Quiet random-motion G-code
+
+All seven current random files (`gcodes/input*.txt`) begin with `M204 P8 T8`. It overrides the launcher's 15 mm/s² acceleration for random movement only, reducing acceleration to 8 mm/s². The original struggling trajectory is preserved, scaled independently on each axis to 0–120 mm, then retraced back to its starting position before repeating. It uses a fixed `F338` feedrate, 30% above the previous `F260`. Rebuild and upload the ESP-12S or ESP32 firmware after editing these files; the Octopus SD card is not needed for normal operation.
+
+## Microstep comparisons
+
+**The current builds use 256 microsteps and SpreadCycle.** Lower subdivision increases the torque associated with a single small commanded increment; it does not multiply the motor's available running torque. Full/half stepping can introduce more vibration and noise. Microstepping helps smoothness even when positioning precision is unimportant. See [Analog Devices on microstepping and running torque](https://www.analog.com/en/resources/analog-dialogue/articles/mastering-precision-understanding-microstepping.html).
+
+All supported microstep settings retain 256-step interpolation, so audible differences may be small. There is no guaranteed microstep setting that simultaneously maximizes torque and minimizes noise.
+
+A 0.5 mm position tolerance does not make stalling acceptable: this system has no position feedback to correct missed steps, so their error can accumulate far beyond that tolerance.
+
+For a microstep-only comparison in the normal build, set **only `SPIDER_MICROSTEPS`** in `Marlin/marlin-2.1.2.6/Marlin/Configuration.h`, then rebuild. It sets all six TMC microstep values and scales all six steps/mm together. The `marlin-max` environment overrides this macro to 256 via its build flags:
+
+| SPIDER_MICROSTEPS | Steps/mm | Purpose |
+| --- | --- | --- |
+| 16 | 533.33 | Earlier baseline |
+| 2 | 66.66625 | Coarse-command experiment; no promised torque gain or noise reduction |
+| 8 | 266.665 | Lower pulse-rate comparison; no promised torque gain |
+| 32 | 1066.66 | Finer-command comparison; no promised noise reduction |
+| 64 | 2133.32 | Earlier test profile |
+| 128 | 4266.64 | Optional comparison |
+| 256 | 8533.28 | Current setting in both builds |
+
+The calibration comes from the existing 533.33 steps/mm value, not a new measurement of the gearing. The same G-code coordinates retain the same intended physical travel. Do not halve microsteps without halving steps/mm: that would double travel, speed, and acceleration in physical units. Do not change the generic `MICROSTEP_MODES` array or use `M350` for these SPI TMC drivers; this tree's M350 operates hardware MS pins, not the TMC SPI microstep registers.
+
+Build from the repository root without copying anything to an SD card:
+
+```powershell
+python -m platformio run -d Marlin/marlin-2.1.2.6 -e STM32F446ZE_btt
+```
+
+The root `build.py` also copies firmware to a detected SD card, so use the command above for build-only checks. After cooling and rating checks, use the normal README flash procedure for the chosen profile and re-home before motion. EEPROM settings are disabled in this source: do not depend on M500 to save runtime experiments. Check M503 and M122 after each flash; old/manual M92 values would invalidate the comparison.
+
+## Controlled bench checks after cooling and rating verification
+
+1. Support the mechanism, ensure every driver has airflow, and establish a current within the confirmed motor/module ratings. Do not reduce holding current with a suspended load unsupported.
+2. Prevent the ESP32 startup automation from homing and starting random motion during setup. For a direct Octopus USB bench test, disconnect the ESP32 control connection with power off. Merely closing the web page does not stop the automation.
+3. Read and save the baseline with the commands below. All six drivers must communicate correctly. Investigate `All HIGH` / `All LOW`, thermal warnings, or shorts before moving.
+4. Once the rig is ready for motion, home it, compare the same short motion and the same feedrate in each profile, and then run the ESP's `M215 S1` loop. For a direct Octopus USB bench comparison without the ESP, paste a short section of `gcodes/input.txt` as ordinary G-code; Octopus USB `M215` and `M23`/`M24` require an SD card. Re-home after any stall or skipped movement.
+5. Record current, microsteps, chopper mode, speed override, temperature at the same location, noise, and missed movement. Stop for renewed abnormal heating, thermal warnings, loss of torque, or rough/stalled motion. A short successful move does not establish a safe continuous temperature; check the intended duty cycle after short trials pass.
+
+Read-only diagnostics:
+
+```gcode
+M115
+M503
+M906
+M569
+M122
+M911
+```
+
+M122 reports configuration and driver status flags; it is not a calibrated external-module thermometer. Capture M911 before clearing any warning history. Look for serial messages such as `current decreased to ...`, which would support thermal current reduction as a cause of weak motion.
+
+After the rig is cool and stationary, compare chopper modes separately from the microstep comparison. With SD streaming stopped/paused and no competing commands from the ESP32, wait for queued motion and select SpreadCycle on all six axes:
+
+```gcode
+M400
+M569 S0 X Y Z A B C
+M569
+```
+
+For a supported, light-load quietness comparison, StealthChop is available at runtime even though SpreadCycle is the default. Start from standstill and allow initial regulation before moving:
+
+```gcode
+M400
+M569 S1 X Y Z A B C
+G4 P1000
+M569
+```
+
+StealthChop is designed for quietness; confirm its load margin with the actual motor. For forceful movement and changing loads, retain SpreadCycle unless testing establishes adequate performance in StealthChop. Switch back with the S0 sequence while stationary. M400 alone does not stop a streaming SD loop.
+
+For a gentler acceleration experiment, `M204 P8 T8` lowers travel acceleration, but apply it **after** launching/pausing an M215 job because M215 resets it to 15 on each new launch. Hold feedrate, current, and microsteps constant during this comparison. Slower acceleration reduces inertial torque demand; it does not remove gravity load. Reducing speed is not guaranteed to quiet a resonance.

@@ -2419,7 +2419,7 @@
 // Without XON/XOFF flow control (see SERIAL_XON_XOFF below) 32 bytes should be enough.
 // To use flow control, set this buffer size to at least 1024 bytes.
 // :[0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
-//#define RX_BUFFER_SIZE 1024
+#define RX_BUFFER_SIZE 1024 // Room for ESP override/configuration bursts while a move is finishing.
 
 #if RX_BUFFER_SIZE >= 1024
   // Enable to have the controller send XON/XOFF control characters to
@@ -2468,7 +2468,11 @@
  * - During Hold all Emergency Parser commands are available, as usual.
  * - Enable NANODLP_Z_SYNC and NANODLP_ALL_AXIS for move command end-state reports.
  */
-//#define REALTIME_REPORTING_COMMANDS
+#define REALTIME_REPORTING_COMMANDS
+// Lumiac's lamp channel remains responsive inside homing / planner waits.
+#define LUMIAC_REALTIME_LIGHT
+// FAN0 cooling follows actual motion: idle/pause 30%, moving 80%, random 100%.
+#define LUMIAC_MOTION_FAN
 #if ENABLED(REALTIME_REPORTING_COMMANDS)
   //#define FULL_REPORT_TO_HOST_FEATURE   // Auto-report the machine status like Grbl CNC
 #endif
@@ -2725,7 +2729,21 @@
  */
 #if HAS_TRINAMIC_CONFIG || HAS_TMC26X
 
-  #define HOLD_MULTIPLIER    0.5  // Scales down the holding current from run current
+  // Shared six-axis settings. 3 A RMS respects the module base connection limit.
+  // Requires effective cooling and motors rated for this current.
+  #ifndef SPIDER_RUN_CURRENT_MA
+    #define SPIDER_RUN_CURRENT_MA 3000
+  #endif
+  #ifndef SPIDER_HOME_CURRENT_MA
+    #define SPIDER_HOME_CURRENT_MA 2500
+  #endif
+  #ifndef SPIDER_HOLD_MULTIPLIER
+    #define SPIDER_HOLD_MULTIPLIER 0.416666667f // Keep nominal run-to-hold current near 1.25 A.
+  #endif
+  #if SPIDER_RUN_CURRENT_MA <= 0 || SPIDER_RUN_CURRENT_MA > 3000 || SPIDER_HOME_CURRENT_MA <= 0 || SPIDER_HOME_CURRENT_MA > 3000
+    #error "Spider current must be 1..3000 mA RMS; the BTT module base is limited to 3 A."
+  #endif
+  #define HOLD_MULTIPLIER SPIDER_HOLD_MULTIPLIER
 
   /**
    * Interpolate microsteps to 256
@@ -2734,9 +2752,9 @@
   #define INTERPOLATE      true
 
   #if AXIS_IS_TMC_CONFIG(X)
-    #define X_CURRENT      2500        // (mA) RMS current for actively-cooled TMC5160.
-    #define X_CURRENT_HOME  X_CURRENT  // (mA) RMS current for homing. (Typically lower than *_CURRENT.)
-    #define X_MICROSTEPS     16        // 0..256
+    #define X_CURRENT      SPIDER_RUN_CURRENT_MA  // (mA RMS) Requires active cooling.
+    #define X_CURRENT_HOME SPIDER_HOME_CURRENT_MA
+    #define X_MICROSTEPS     SPIDER_MICROSTEPS // Keep in sync with steps/mm in Configuration.h
     #define X_RSENSE          0.075    // BTT TMC5160/TMC5160T modules commonly use 0.075 ohm sense resistors
     #define X_CHAIN_POS      -1        // -1..0: Not chained. 1: MCU MOSI connected. 2: Next in chain, ...
     //#define X_INTERPOLATE  true      // Enable to override 'INTERPOLATE' for the X axis
@@ -2754,9 +2772,9 @@
   #endif
 
   #if AXIS_IS_TMC_CONFIG(Y)
-    #define Y_CURRENT      2500
-    #define Y_CURRENT_HOME  Y_CURRENT
-    #define Y_MICROSTEPS     16
+    #define Y_CURRENT      SPIDER_RUN_CURRENT_MA
+    #define Y_CURRENT_HOME SPIDER_HOME_CURRENT_MA
+    #define Y_MICROSTEPS     SPIDER_MICROSTEPS
     #define Y_RSENSE          0.075
     #define Y_CHAIN_POS      -1
     //#define Y_INTERPOLATE  true
@@ -2774,9 +2792,9 @@
   #endif
 
   #if AXIS_IS_TMC_CONFIG(Z)
-    #define Z_CURRENT      2500
-    #define Z_CURRENT_HOME  Z_CURRENT
-    #define Z_MICROSTEPS     16
+    #define Z_CURRENT      SPIDER_RUN_CURRENT_MA
+    #define Z_CURRENT_HOME SPIDER_HOME_CURRENT_MA
+    #define Z_MICROSTEPS     SPIDER_MICROSTEPS
     #define Z_RSENSE          0.075
     #define Z_CHAIN_POS      -1
     //#define Z_INTERPOLATE  true
@@ -2814,9 +2832,9 @@
   #endif
 
   #if AXIS_IS_TMC_CONFIG(I)
-    #define I_CURRENT     2500
-    #define I_CURRENT_HOME I_CURRENT
-    #define I_MICROSTEPS    16
+    #define I_CURRENT     SPIDER_RUN_CURRENT_MA
+    #define I_CURRENT_HOME SPIDER_HOME_CURRENT_MA
+    #define I_MICROSTEPS    SPIDER_MICROSTEPS
     #define I_RSENSE         0.075
     #define I_CHAIN_POS     -1
     //#define I_INTERPOLATE  true
@@ -2824,9 +2842,9 @@
   #endif
 
   #if AXIS_IS_TMC_CONFIG(J)
-    #define J_CURRENT     2500
-    #define J_CURRENT_HOME J_CURRENT
-    #define J_MICROSTEPS    16
+    #define J_CURRENT     SPIDER_RUN_CURRENT_MA
+    #define J_CURRENT_HOME SPIDER_HOME_CURRENT_MA
+    #define J_MICROSTEPS    SPIDER_MICROSTEPS
     #define J_RSENSE         0.075
     #define J_CHAIN_POS     -1
     //#define J_INTERPOLATE  true
@@ -2834,9 +2852,9 @@
   #endif
 
   #if AXIS_IS_TMC_CONFIG(K)
-    #define K_CURRENT     2500
-    #define K_CURRENT_HOME K_CURRENT
-    #define K_MICROSTEPS    16
+    #define K_CURRENT     SPIDER_RUN_CURRENT_MA
+    #define K_CURRENT_HOME SPIDER_HOME_CURRENT_MA
+    #define K_MICROSTEPS    SPIDER_MICROSTEPS
     #define K_RSENSE         0.075
     #define K_CHAIN_POS     -1
     //#define K_INTERPOLATE  true

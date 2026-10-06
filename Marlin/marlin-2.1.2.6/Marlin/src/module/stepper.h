@@ -45,6 +45,9 @@
 
 #include "planner.h"
 #include "stepper/indirection.h"
+#if ENABLED(SPIDER_CONCURRENT_HOMING)
+  #include "spider_homing.h"
+#endif
 #ifdef __AVR__
   #include "stepper/speed_lookuptable.h"
 #endif
@@ -521,6 +524,11 @@ class Stepper {
 
     static bool abort_current_block;        // Signals to the stepper that current block should be aborted
 
+    #if ENABLED(SPIDER_CONCURRENT_HOMING)
+      static volatile bool spider_homing_active;
+      static volatile uint8_t spider_homing_stopped;
+    #endif
+
     #if ENABLED(X_DUAL_ENDSTOPS)
       static bool locked_X_motor, locked_X2_motor;
     #endif
@@ -623,7 +631,19 @@ class Stepper {
 
     // The stepper subsystem goes to sleep when it runs out of things to execute.
     // Call this to notify the subsystem that it is time to go to work.
-    static void wake_up() { ENABLE_STEPPER_DRIVER_INTERRUPT(); }
+    #if ENABLED(REALTIME_REPORTING_COMMANDS)
+      static volatile bool realtime_paused;
+    #endif
+    static void wake_up() {
+      // Finishing a G1 enqueue must not undo a pause received in its UART ISR.
+      #if ENABLED(REALTIME_REPORTING_COMMANDS)
+        CRITICAL_SECTION_START();
+        if (!realtime_paused) ENABLE_STEPPER_DRIVER_INTERRUPT();
+        CRITICAL_SECTION_END();
+      #else
+        ENABLE_STEPPER_DRIVER_INTERRUPT();
+      #endif
+    }
 
     static bool is_awake() { return STEPPER_ISR_ENABLED(); }
 
@@ -712,6 +732,12 @@ class Stepper {
 
     // Handle a triggered endstop
     static void endstop_triggered(const AxisEnum axis);
+
+    #if ENABLED(SPIDER_CONCURRENT_HOMING)
+      // Only call with an empty planner, before / after the single homing block.
+      static void begin_spider_homing();
+      static uint8_t end_spider_homing();
+    #endif
 
     // Triggered position of an axis in steps
     static int32_t triggered_position(const AxisEnum axis);

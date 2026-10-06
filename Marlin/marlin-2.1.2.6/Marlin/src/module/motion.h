@@ -430,6 +430,9 @@ void set_axis_is_at_home(const AxisEnum axis);
    */
   extern main_axes_bits_t axes_homed, axes_trusted;
   void homeaxis(const AxisEnum axis);
+  #if ENABLED(SPIDER_CONCURRENT_HOMING)
+    void home_spider_group();
+  #endif
   void set_axis_never_homed(const AxisEnum axis);
   main_axes_bits_t axes_should_home(main_axes_bits_t axes_mask=main_axes_mask);
   bool homing_needed_error(main_axes_bits_t axes_mask=main_axes_mask);

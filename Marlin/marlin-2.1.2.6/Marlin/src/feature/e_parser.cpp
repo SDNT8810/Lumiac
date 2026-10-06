@@ -43,6 +43,12 @@ bool EmergencyParser::killed_by_M112, // = false
 #endif
 
 // Global instance
+#if ENABLED(LUMIAC_REALTIME_LIGHT)
+  volatile int16_t EmergencyParser::light_pending = -1;
+#endif
+#if ENABLED(LUMIAC_MOTION_FAN)
+  volatile uint8_t EmergencyParser::fan_mode = lumiac::FanNormal;
+#endif
 EmergencyParser emergency_parser;
 
 #endif // EMERGENCY_PARSER

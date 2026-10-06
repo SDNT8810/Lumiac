@@ -81,6 +81,10 @@
 
 Stepper stepper; // Singleton
 
+#if ENABLED(REALTIME_REPORTING_COMMANDS)
+  volatile bool Stepper::realtime_paused = false;
+#endif
+
 #define BABYSTEPPING_EXTRA_DIR_WAIT
 
 #ifdef __AVR__
@@ -165,6 +169,11 @@ axis_bits_t Stepper::last_direction_bits, // = 0
             Stepper::axis_did_move; // = 0
 
 bool Stepper::abort_current_block;
+
+#if ENABLED(SPIDER_CONCURRENT_HOMING)
+  volatile bool Stepper::spider_homing_active = false;
+  volatile uint8_t Stepper::spider_homing_stopped = 0;
+#endif
 
 #if DISABLED(MIXING_EXTRUDER) && HAS_MULTI_EXTRUDER
   uint8_t Stepper::last_moved_extruder = 0xFF;
@@ -1712,7 +1721,7 @@ void Stepper::pulse_phase_isr() {
 
     // Start an active pulse if needed
     #define PULSE_START(AXIS) do{ \
-      if (step_needed[_AXIS(AXIS)]) { \
+      if (step_needed[_AXIS(AXIS)] && TERN1(SPIDER_CONCURRENT_HOMING, !spider_homing::stopped(spider_homing_stopped, _AXIS(AXIS)))) { \
         count_position[_AXIS(AXIS)] += count_direction[_AXIS(AXIS)]; \
         _APPLY_STEP(AXIS, !_INVERT_STEP_PIN(AXIS), 0); \
       } \
@@ -3196,6 +3205,24 @@ void Stepper::set_axis_position(const AxisEnum a, const int32_t &v) {
   #endif
 }
 
+#if ENABLED(SPIDER_CONCURRENT_HOMING)
+  void Stepper::begin_spider_homing() {
+    CRITICAL_SECTION_START();
+    spider_homing_stopped = 0;
+    spider_homing_active = true;
+    CRITICAL_SECTION_END();
+  }
+
+  uint8_t Stepper::end_spider_homing() {
+    CRITICAL_SECTION_START();
+    const uint8_t stopped = spider_homing_stopped;
+    spider_homing_active = false;
+    spider_homing_stopped = 0;
+    CRITICAL_SECTION_END();
+    return stopped;
+  }
+#endif
+
 // Signal endstops were triggered - This function can be called from
 // an ISR context  (Temperature, Stepper or limits ISR), so we must
 // be very careful here. If the interrupt being preempted was the
@@ -3224,8 +3251,19 @@ void Stepper::endstop_triggered(const AxisEnum axis) {
     #endif
   );
 
-  // Discard the rest of the move if there is a current block
-  quick_stop();
+  // During concurrent homing, latch this motor off while the other motors
+  // continue the same block. Switch bounce cannot restart a stopped motor.
+  // Normal endstop hits and unexpected axes still abort the whole block.
+  bool stop_block = true;
+  #if ENABLED(SPIDER_CONCURRENT_HOMING)
+    if (spider_homing_active && axis <= K_AXIS) {
+      CRITICAL_SECTION_START();
+      spider_homing_stopped = spider_homing::latch(spider_homing_stopped, axis);
+      stop_block = spider_homing::complete(spider_homing_stopped);
+      CRITICAL_SECTION_END();
+    }
+  #endif
+  if (stop_block) quick_stop();
 
   if (was_enabled) wake_up();
 }

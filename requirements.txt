@@ -1,2 +1,2 @@
-# PlatformIO builds both the ESP32 and BTT Octopus firmware projects.
+# PlatformIO builds the ESP32, ESP-12S (ESP8266), and BTT Octopus firmware.
 platformio==6.1.19

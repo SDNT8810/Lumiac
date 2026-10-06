@@ -1220,14 +1220,33 @@
  * Override with M92
  *                                      X, Y, Z [, I [, J [, K...]]], E0 [, E1[, E2...]]
  */
-#define DEFAULT_AXIS_STEPS_PER_UNIT   { 533.33, 533.33, 533.33, 533.33, 533.33, 533.33 } // Calibrated for the 3:1 gearing
+// One setting for all six TMC drivers AND their distance calibration.
+// Compare 2 / 8 / 16 / 32 / 64 / 128 / 256 only after resolving overheating. See Docs/driver-tuning.md.
+// Keep the measured 533.33 steps/mm at 16 microsteps as the reference.
+#ifndef SPIDER_MICROSTEPS
+  // Driver interpolation stays at 256; fewer external pulses reduce step-timing load.
+  #define SPIDER_MICROSTEPS 32
+#endif
+#if SPIDER_MICROSTEPS != 2 && SPIDER_MICROSTEPS != 8 && SPIDER_MICROSTEPS != 16 && SPIDER_MICROSTEPS != 32 && SPIDER_MICROSTEPS != 64 && SPIDER_MICROSTEPS != 128 && SPIDER_MICROSTEPS != 256
+  #error "SPIDER_MICROSTEPS must be 2, 8, 16, 32, 64, 128, or 256."
+#endif
+#define SPIDER_AXIS_STEPS_PER_UNIT (533.33f * SPIDER_MICROSTEPS / 16.0f)
+#define DEFAULT_AXIS_STEPS_PER_UNIT { SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT }
+
+// Octopus-only motion reduction, applied once per planner block after the
+// requested speed/acceleration and axis limits. ESP M201/M204/M220 commands and
+// EEPROM reloads keep their original values; their effective output is 70%.
+#define LUMIAC_MOTION_PERCENT 70
+#if LUMIAC_MOTION_PERCENT <= 0 || LUMIAC_MOTION_PERCENT > 100
+  #error "LUMIAC_MOTION_PERCENT must be between 1 and 100."
+#endif
 
 /**
  * Default Max Feed Rate (linear=mm/s, rotational=°/s)
  * Override with M203
  *                                      X, Y, Z [, I [, J [, K...]]], E0 [, E1[, E2...]]
  */
-#define DEFAULT_MAX_FEEDRATE          { 260, 260, 260, 260, 260, 260 } // 30% faster on all six arms
+#define DEFAULT_MAX_FEEDRATE          { 390, 390, 390, 390, 390, 390 } // mm/s; 50% above the previous 260 mm/s limit
 
 //#define LIMITED_MAX_FR_EDITING        // Limit edit via M203 or LCD to DEFAULT_MAX_FEEDRATE * 2
 #if ENABLED(LIMITED_MAX_FR_EDITING)
@@ -2150,7 +2169,12 @@
 #endif
 
 // Homing speeds (linear=mm/min, rotational=°/min)
-#define HOMING_FEEDRATE_MM_M { 400, 400, 400, 400, 400, 400 }
+#define HOMING_FEEDRATE_MM_M { 160, 160, 160, 160, 160, 160 }
+
+// Lumiac: G28 / G28 X Y Z A B C homes all six independent arms in one pass.
+// Each motor stops at its own MIN switch. Single-axis G28 keeps standard homing.
+#define SPIDER_CONCURRENT_HOMING
+#define SPIDER_HOME_RELEASE_MM 2.0f // Release any switches already pressed before the approach.
 
 // Validate that endstops are triggered on homing moves
 #define VALIDATE_HOMING_ENDSTOPS

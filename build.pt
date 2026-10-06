@@ -1,0 +1,7 @@
+"""Compatibility entry point for the requested `python build.pt ...` commands."""
+
+from build import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
