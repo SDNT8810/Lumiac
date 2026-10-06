@@ -107,8 +107,7 @@ def main(argv: list[str] | None = None) -> int:
             environment = MARLIN_ENVIRONMENTS[target]
             firmware_src = project_dir / ".pio" / "build" / environment / "firmware.bin"
             print(f"Building {target} ({environment}) from {project_dir}...", flush=True)
-            if target == "marlin-max":
-                print("Test profile: 3.0 A RMS run current, 256 microsteps. Requires effective driver cooling and compatible motor ratings.", flush=True)
+            print("Motion profile: 3.0 A RMS run current, 32 commanded microsteps with interpolation to 256, 70% speed/acceleration.", flush=True)
             run_build(project_dir, environment)
             if not args.build_only:
                 # Check the build artifact before removing the previous SD marker.

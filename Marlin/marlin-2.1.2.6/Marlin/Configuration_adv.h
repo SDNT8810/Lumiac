@@ -2729,16 +2729,16 @@
  */
 #if HAS_TRINAMIC_CONFIG || HAS_TMC26X
 
-  // Shared six-axis settings. The optional marlin-max build overrides run current
-  // and hold ratio; it requires effective cooling and motors rated for that current.
+  // Shared six-axis settings. 3 A RMS respects the module base connection limit.
+  // Requires effective cooling and motors rated for this current.
   #ifndef SPIDER_RUN_CURRENT_MA
-    #define SPIDER_RUN_CURRENT_MA 2500
+    #define SPIDER_RUN_CURRENT_MA 3000
   #endif
   #ifndef SPIDER_HOME_CURRENT_MA
     #define SPIDER_HOME_CURRENT_MA 2500
   #endif
   #ifndef SPIDER_HOLD_MULTIPLIER
-    #define SPIDER_HOLD_MULTIPLIER 0.5f
+    #define SPIDER_HOLD_MULTIPLIER 0.416666667f // Keep nominal run-to-hold current near 1.25 A.
   #endif
   #if SPIDER_RUN_CURRENT_MA <= 0 || SPIDER_RUN_CURRENT_MA > 3000 || SPIDER_HOME_CURRENT_MA <= 0 || SPIDER_HOME_CURRENT_MA > 3000
     #error "Spider current must be 1..3000 mA RMS; the BTT module base is limited to 3 A."

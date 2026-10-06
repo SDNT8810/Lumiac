@@ -1,39 +1,46 @@
 # Driver cooling, torque, and noise
 
-## 256-microstep builds and full-stroke motion
+## Octopus-only 30% motion reduction
 
-The `marlin-max` target prepares the requested higher-current profile. It is separate from the normal build because drivers have already been measured at 95-110 C: do not operate this higher-current profile with the unresolved cooling condition. It also requires motors rated for the selected phase current. The commercial module revision and motor nameplate ratings have not been physically verified.
+The current Octopus firmware applies **70% of the planned speed and acceleration** to every move, including random programs, POS, manual moves and homing. Updating the ESP32 is unnecessary. `LUMIAC_MOTION_PERCENT` in `Configuration.h` sets this factor; it is applied after the motion planner's axis limits, before the acceleration profile is calculated.
 
-| Setting | Normal `marlin` | Test `marlin-max` |
-| --- | --- | --- |
-| Commanded microsteps | 256 | 256 |
-| Steps/mm, all six axes | 8533.28 | 8533.28 |
-| Run current, all six axes | 2500 mA RMS | 3000 mA RMS |
-| Homing current | 2500 mA RMS | 2500 mA RMS |
-| Nominal holding current after a run | About 1250 mA RMS | About 1250 mA RMS |
-| Driver mode | SpreadCycle | SpreadCycle |
-| Interpolation | To 256 | To 256 |
-| Thermal warnings/current reduction/error stop | Enabled | Enabled |
+This also applies to the existing ESP's `M201`, `M204`, `M220` and per-move `F` commands. For example, an effective feed of 300 mm/min becomes 210 mm/min, travel acceleration 15 becomes 10.5 mm/s2, the random file's acceleration 8 becomes 5.6 mm/s2, and homing at 160 becomes 112 mm/min. Short moves may never reach their requested cruise speed. Coordinates, steps/mm, driver current, lights, fan duties and remote functions retain their existing settings.
 
-Holding current is quantized by the driver; the test profile uses a 0.416666667 hold multiplier to avoid increasing idle heating along with run current. That multiplier also scales holding current during a temporary homing-current setting. Steps/mm scales with the selected microsteps, so changing microsteps does not change physical travel. Both builds now command 256 microsteps; the max profile differs in current.
+The dashboard and `M503` continue to display requested values; Octopus applies the reduction internally. EEPROM resets are not required, and repeated program starts or `M501` do not remove or compound the reduction. Both normal and `marlin-max` builds include it; use the same current profile as the installed firmware.
 
-BTT rates the TMC5160T Pro at **3.1 A RMS / 4.4 A peak**, and lists a **3 A maximum for the module base connection**. The test build therefore requests 3.0 A RMS, not 3.3 A. This is a hardware-based test ceiling, not a validated safe continuous current for the current assembly. See [BTT's specification](https://global.bttwiki.com/TMC5160T%20Pro%20V1.0.html).
+Build the normal profile with `python build.py marlin --build-only`, then copy `Marlin/marlin-2.1.2.6/.pio/build/STM32F446ZE_btt/firmware.bin` to the Octopus microSD root as `firmware.bin`. Power-cycle Octopus and verify the card file is renamed `FIRMWARE.CUR`. First check the reduced movement with the lamps supported: a 30% reduction has not been physically validated against the reported dropping problem.
 
-Compared with 2.5 A, 3.0 A represents 20% more phase current and about **44% more resistive heating** at the same resistance. Torque will not necessarily rise proportionally near motor saturation. Reducing speed from the dashboard can improve torque margin but does not reduce the configured phase current; it cannot substitute for cooling.
+## Current Octopus torque and step-pulse profile (2026-10-06)
 
-256 commanded microsteps is the maximum supported here, not a torque multiplier. The old 64-microstep setting already interpolated to 256 internally, so an audible improvement is uncertain. The new setting sends four times as many step pulses for the same motion; verify smooth operation at the intended speed. See [Analog Devices on microstepping](https://www.analog.com/en/resources/analog-dialogue/articles/mastering-precision-understanding-microstepping.html).
+The user reports cooling now keeps the assembly below 40 C, motors rated for 10 A, and motor wires soldered directly after arcing at the L6 socket. L6's driver is to be replaced. These are reported hardware conditions; the firmware has not been physically tested on the mechanism.
 
-Build only, without copying to SD or flashing:
+Both `marlin` and the compatibility target `marlin-max` now use:
 
-```powershell
-python build.pt marlin-max --build-only
-```
+| Setting | Value |
+| --- | --- |
+| Commanded microsteps, all six axes | 32 |
+| Driver interpolation | To 256 |
+| Steps/mm, all six axes | 1066.66 |
+| Running current | 3000 mA RMS |
+| Homing current | 2500 mA RMS |
+| Nominal holding current after a run | About 1250 mA RMS |
+| Driver mode | SpreadCycle |
+| Planned speed and acceleration | Existing 70% factor |
+| Thermal warnings/current reduction/error stop | Enabled |
 
-Output: `Marlin/marlin-2.1.2.6/.pio/build/STM32F446ZE_btt_max_power/firmware.bin`. This is **Octopus/Marlin firmware**, not ESP-12S firmware. The ESP does not need reflashing for this profile. After resolving cooling and checking motor compatibility, use the normal SD-card flashing procedure and re-home. The existing ESP startup homing/autoplay still applies.
+The previous normal build used 256 commanded microsteps and 8533.28 steps/mm. Both values are divided by eight together, preserving the physical distance, speed and acceleration for the same commands. This reduces externally commanded step pulses by eight; it does not multiply running torque. Interpolation remains enabled for driver-generated intermediate steps. See [Analog Devices on MicroPlyer](https://support.analog.com/en-us/knowledgebase/article/KA-15726).
 
-`python build.py marlin-max` builds and copies the test binary to the configured SD path if present, using the same copy behavior as `python build.py`. To return to the normal 256-microstep / 2.5 A firmware, build `python build.py marlin --build-only` and flash its separate `STM32F446ZE_btt/firmware.bin`.
+Running current rises from 2.5 A to 3 A RMS. The hold multiplier is adjusted to 0.416666667 so nominal holding current after a run remains approximately 1.25 A. Driver current quantization applies. Homing stays at 2.5 A; its holding current uses the same multiplier. BTT lists a 3 A maximum for the TMC5160T Pro module base connection, so the motor's reported 10 A capability is not used as the board/module current ceiling. [BTT specification](https://global.bttwiki.com/TMC5160T%20Pro%20V1.0.html).
 
-The build flags are in `Marlin/marlin-2.1.2.6/ini/lumiac.ini`. Compile-time guards reject configured run or homing current above 3000 mA; this is not a runtime clamp on manually entered M906 commands. No thermal protection is disabled, and program starts do not reapply high current over thermal current reductions.
+The normal build has EEPROM settings disabled, so old saved steps/mm do not survive reboot. The ESP launcher and embedded programs contain no M92/M350 overrides; ESP32 does not need updating. Coordinates, 0-120 mm travel limits, fan/light control and remote behavior are unchanged. The idle release timeout and immediate pause/resume implementation are also unchanged; this profile addresses continuous-motion current and pulse demand, not those separate behaviors.
+
+Build with `python build.py marlin --build-only`. Copy `Marlin/marlin-2.1.2.6/.pio/build/STM32F446ZE_btt/firmware.bin` to the Octopus microSD root as `firmware.bin`, power-cycle, and verify it becomes `FIRMWARE.CUR`. Re-home before checking short supported movements, then POS and random. A higher-current profile cannot repair a driver damaged by prior arcing, and this tuning is not proof that missed steps are resolved.
+
+The `marlin-max` target is retained for existing build commands and now produces the same settings as `marlin`. Compile-time guards reject configured running or homing current above 3000 mA; manually entered M906 values are not clamped by those guards.
+
+## Historical investigations
+
+The notes below describe earlier configurations and heating reports. They are retained as investigation history, not the current build specification. Cooling has since been added, and the current profile is listed above.
 
 ## Follow-up: random motion at 95-110 C
 

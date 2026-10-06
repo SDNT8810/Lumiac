@@ -1224,13 +1224,22 @@
 // Compare 2 / 8 / 16 / 32 / 64 / 128 / 256 only after resolving overheating. See Docs/driver-tuning.md.
 // Keep the measured 533.33 steps/mm at 16 microsteps as the reference.
 #ifndef SPIDER_MICROSTEPS
-  #define SPIDER_MICROSTEPS 256
+  // Driver interpolation stays at 256; fewer external pulses reduce step-timing load.
+  #define SPIDER_MICROSTEPS 32
 #endif
 #if SPIDER_MICROSTEPS != 2 && SPIDER_MICROSTEPS != 8 && SPIDER_MICROSTEPS != 16 && SPIDER_MICROSTEPS != 32 && SPIDER_MICROSTEPS != 64 && SPIDER_MICROSTEPS != 128 && SPIDER_MICROSTEPS != 256
   #error "SPIDER_MICROSTEPS must be 2, 8, 16, 32, 64, 128, or 256."
 #endif
 #define SPIDER_AXIS_STEPS_PER_UNIT (533.33f * SPIDER_MICROSTEPS / 16.0f)
 #define DEFAULT_AXIS_STEPS_PER_UNIT { SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT }
+
+// Octopus-only motion reduction, applied once per planner block after the
+// requested speed/acceleration and axis limits. ESP M201/M204/M220 commands and
+// EEPROM reloads keep their original values; their effective output is 70%.
+#define LUMIAC_MOTION_PERCENT 70
+#if LUMIAC_MOTION_PERCENT <= 0 || LUMIAC_MOTION_PERCENT > 100
+  #error "LUMIAC_MOTION_PERCENT must be between 1 and 100."
+#endif
 
 /**
  * Default Max Feed Rate (linear=mm/s, rotational=°/s)

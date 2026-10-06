@@ -2537,6 +2537,12 @@ bool Planner::_populate_block(
 
   #endif // XY_FREQUENCY_LIMIT
 
+  #ifdef LUMIAC_MOTION_PERCENT
+    // Scale after axis limits, so capped moves are reduced too. Both normal
+    // G-code and direct homing segments pass through this common planner path.
+    speed_factor *= (LUMIAC_MOTION_PERCENT) * 0.01f;
+  #endif
+
   // Correct the speed
   if (speed_factor < 1.0f) {
     current_speed *= speed_factor;
@@ -2631,6 +2637,12 @@ bool Planner::_populate_block(
       );
     }
   }
+  #ifdef LUMIAC_MOTION_PERCENT
+    // Apply once after all acceleration limits and before trapezoid/S-curve
+    // planning. Never modify settings: repeated ESP commands must not compound
+    // or remove the reduction. A nonzero request must remain nonzero in steps.
+    if (accel) accel = _MAX(1UL, uint32_t(accel * ((LUMIAC_MOTION_PERCENT) * 0.01f)));
+  #endif
   block->acceleration_steps_per_s2 = accel;
   block->acceleration = accel / steps_per_mm;
   #if DISABLED(S_CURVE_ACCELERATION)
