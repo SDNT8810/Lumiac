@@ -59,6 +59,9 @@
  *       at https://reprap.org/wiki/Firmware_Capabilities_Protocol
  */
 void GcodeSuite::M115() {
+  SERIAL_ECHOLNPGM("Cap:LUMIAC_SD_OTA:1");
+  SERIAL_ECHOLNPGM("LUMIAC_FW_VERSION:" LUMIAC_FIRMWARE_REVISION);
+  SERIAL_ECHOLNPGM("LUMIAC_MACHINE:" LUMIAC_FIRMWARE_ID);
 
   SERIAL_ECHOPGM("FIRMWARE_NAME:Marlin"
     " " DETAILED_BUILD_VERSION " (" __DATE__ " " __TIME__ ")"

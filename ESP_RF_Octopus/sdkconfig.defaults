@@ -9,4 +9,9 @@ CONFIG_BT_BLE_ENABLED=n
 CONFIG_BT_HID_ENABLED=y
 CONFIG_BT_HID_HOST_ENABLED=y
 CONFIG_BT_SSP_ENABLED=y
-CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_ota.csv"
+# Arduino 2.x wraps its complete TLS client in a PSK-feature compile guard.
+# Connections still use CA certificate verification, never PSK/insecure mode.
+CONFIG_MBEDTLS_PSK_MODES=y
+CONFIG_MBEDTLS_KEY_EXCHANGE_PSK=y

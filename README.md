@@ -1,5 +1,11 @@
 # Lumiac
 
+**Remote control and firmware updates:** use **https://lumiac.control.timiac.it/**
+with the existing Andrea account. Both ESP32 and ESP-12S controller variants can
+update themselves and the Octopus over the internet after one initial USB/SD
+installation. Use [the setup guide](Docs/remote-updates.md); prebuilt images and
+checksums are in `firmware/`. Leave the Octopus microSD installed.
+
 Lumiac is the control stack for a six-axis hexapod/spider robot built around a BIGTREETECH Octopus v1.1 and an ESP-12S or ESP32 controller. It includes customized Marlin firmware, a Wi-Fi/RF bridge, motion programs embedded in ESP flash, a browser control panel, and a local motion simulator.
 
 > **Hardware warning:** This project controls high-current stepper drivers and moving machinery. Test with the robot raised or the motors disconnected, keep an emergency power cut-off within reach, and verify every pin and current limit before applying motor power.
@@ -20,7 +26,7 @@ Lumiac is the control stack for a six-axis hexapod/spider robot built around a B
 
 ## Requirements
 
-- Python 3.9 or newer
+- Python 3.10 or newer
 - Git
 - Node.js 18 or newer, only for the local WebApp and simulator
 - A data-capable USB cable and the correct serial-port driver for your board
@@ -85,7 +91,7 @@ The PlatformIO environments are `esp12s` (ESP8266) and `esp32dev`. Their binarie
 
 After boot, connect a phone or computer to the selected controller's access point:
 
-- SSID: `ESP_RF_Octopus`
+- SSID: `Lumiac`
 - Default password: `octopus123`
 - Control page: <http://192.168.4.1>
 
@@ -130,7 +136,7 @@ To flash the board:
 2. Copy the generated file to the SD-card root as `firmware.bin`.
 3. Turn off the Octopus board, insert the card, and power it on.
 4. Confirm that the board renamed `firmware.bin` to `FIRMWARE.CUR`.
-5. Turn off the Octopus, remove the SD card, and power it on again. The ESP supplies the motion programs over UART.
+5. Leave the SD card installed for remote firmware updates. The ESP supplies motion programs over UART.
 
 This is not stock Marlin. It contains the required six-axis configuration. Its legacy `M215` SD-file commands still require an SD card when sent directly to the Octopus USB port; the ESP handles dashboard, RF, and ESP-terminal `M215` commands locally and streams ordinary G-code to Marlin.
 

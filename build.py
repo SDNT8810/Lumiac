@@ -97,12 +97,16 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if target in ESP_ENVIRONMENTS:
+            from tools.firmware_package import prepare
+            prepare()
             environment = ESP_ENVIRONMENTS[target]
             port = args.port if not args.build_only else None
             print(f"Building {target} ({environment})" + (f" and uploading to {port}" if port else " only") + "...", flush=True)
             run_build(ESP_PROJECT_DIR, environment, port)
             print(f"Firmware: {ESP_PROJECT_DIR / '.pio' / 'build' / environment / 'firmware.bin'}")
         else:
+            from tools.firmware_package import prepare
+            prepare()
             project_dir = resolve_project_dir()
             environment = MARLIN_ENVIRONMENTS[target]
             firmware_src = project_dir / ".pio" / "build" / environment / "firmware.bin"

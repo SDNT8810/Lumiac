@@ -1,0 +1,30 @@
+{
+  "identity": "LUMIAC1-4464a27508d8",
+  "revision": "2026-10-15.1",
+  "images": {
+    "esp12.bin": {
+      "size": 599440,
+      "sha256": "18abf3b4985fe3b0433634ea51ce25ceca69b54b963b20c8b4537f581c42cb16"
+    },
+    "esp32.bin": {
+      "size": 1552784,
+      "sha256": "068065aa7810efded59e69276ba765b256820d9d1535acfe0f4523612f4d97c2"
+    },
+    "octopus.bin": {
+      "size": 131436,
+      "sha256": "8a69497188aa80e8fa2b74d2507b992b01acfab6b0b9571b7b79441840878bb1"
+    },
+    "esp32_bootloader.bin": {
+      "size": 25632,
+      "sha256": "842856c5f03b660401bc3fc7177b8345f0b36a3636b5de014f74254859e336b9"
+    },
+    "esp32_partitions.bin": {
+      "size": 3072,
+      "sha256": "dd2b067d02ea0db7452f8ade65d8e2717f88246098658bd4342ae355114b6831"
+    },
+    "esp32_boot_app0.bin": {
+      "size": 8192,
+      "sha256": "7d2c7ac4888bfd75cd5f56e8d61f69595121183afc81556c876732fd3782c62f"
+    }
+  }
+}
