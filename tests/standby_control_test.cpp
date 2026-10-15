@@ -18,6 +18,7 @@ struct Snapshot { bool standby; Light light; } snapshot;
 struct Program { bool loop; } randomProgram{true};
 struct Playback { Program* program; bool waitingForHome, waitingForMarker; } embeddedPlayback;
 bool standby, octopusRealtime, octopusFirmwareReady, octopusHomed, octopusMotionFan;
+bool firmwareUpdating = false, firmwareUpdateCancel = false;
 bool spiderProgramActive, spiderProgramPaused, startupHomeInProgress;
 bool playTapHandled, manualSpiderPauseRequested, startupCanceled, loopCanceled;
 unsigned selectedPreset = 0, motionRequests = 0, broadcasts = 0;
@@ -48,6 +49,12 @@ void handleSimpleAction(const String& action, const String&) { ++motionRequests;
 bool sent(const char* command) { return std::find(serial.begin(), serial.end(), command) != serial.end(); }
 
 int main() {
+  firmwareUpdating = true;
+  handleBluetoothEvent(remote_control::Event::Brighter);
+  assert(serial.empty());
+  handleBluetoothEvent(remote_control::Event::Standby);
+  assert(firmwareUpdateCancel && serial.empty());
+  firmwareUpdating = firmwareUpdateCancel = false;
   using remote_control::Event;
   // No Octopus, old firmware, current firmware, and a lost connection.
   for (unsigned capabilities = 0; capabilities < 4; ++capabilities) {

@@ -969,6 +969,7 @@ static const char OCTOPUS_WEB_PAGE[] PROGMEM = R"HTML(
       fetch("/api/state", { cache: "no-store" }).then((response) => response.json()).then((data) => applyState(data)).catch(() => log("Initial state request failed."));
       connectSocket();
     </script>
-  </body>
+  <p style="text-align:center"><a href="/network">Internet / remote access</a></p>
+</body>
 </html>
 )HTML";

@@ -16,10 +16,23 @@
 #include "embedded_gcodes.h"
 #include "bluetooth_remote.h"
 #include "remote_feedback.h"
+#include "cloud_platform.h"
 
 namespace {
 
 using namespace board;
+bool firmwareUpdating = false, firmwareUpdateCancel = false, firmwareParked = false;
+bool octopusSdOta = false;
+String octopusCloudRevision, octopusCloudIdentity;
+void writeRemoteState(JsonDocument& doc);
+bool handleFirmwareLine(const String& line);
+void beginCloud();
+void tickCloud();
+void tickRemoteUpdate();
+void clearFirmwarePark();
+void handleNetworkPage();
+void handleNetworkSave();
+void handleNetworkState();
 constexpr const char* kBoardName = board::kName;
 constexpr char kRemoteBoardName[] = "RF Remote";
 
@@ -399,6 +412,7 @@ void queryLampState(const String& source, const bool logTx = false) {
 }
 
 void fillStateDocument(JsonDocument& doc) {
+  writeRemoteState(doc);
   doc["type"] = "state";
   doc["board"] = kBoardName;
   doc["octopusOnline"] = octopusOnline;
@@ -507,6 +521,7 @@ void sendStateResponse() {
 }
 
 void sendToOctopus(const String& line, const String& source, const bool logTx) {
+  if (firmwareUpdating) return; // The updater exclusively owns UART until activation/failure.
   if (line.isEmpty()) return;
 
   // M215 remains the UI/RF command vocabulary. Its programs now live in ESP
@@ -867,10 +882,10 @@ void markOctopusFirmwareReady() {
     octopusResetVerifyPending = false;
     logMessage(kBoardName, "Octopus reset confirmed by firmware response.");
     syncMotionSpeedToOctopus(kBoardName, false);
-    startupHomePending = true;
-    startupAutoRunPending = true;
+    startupHomePending = !firmwareParked && !firmwareUpdating;
+    startupAutoRunPending = startupHomePending;
     startupHomeReadyMs = millis() + kResetHomeDelayMs;
-    broadcastStatus("Octopus reset complete. Restoring speed and home.");
+    broadcastStatus(startupHomePending ? "Octopus reset complete. Restoring speed and home." : "Octopus reset complete. Motion remains parked; use Home when ready.");
   }
   else if (startupHomePending && !startupHomeInProgress) {
     startupHomeReadyMs = millis() + kStartupHomeDelayMs;
@@ -994,6 +1009,7 @@ void resumeSpiderProgramAfterAdjustment(const String& source, const String& reas
 }
 
 void prepareMotionCommand(const String& source, const char* reason, const bool spiderJob = false) {
+  clearFirmwarePark();
   if (standby) {
     standby = false;
     syncFanModeToOctopus();
@@ -1109,6 +1125,7 @@ void stepDimmer(const String& source, const String& reason) {
 }
 
 void handleRfButtonPressed(const ButtonIndex index) {
+  if (firmwareUpdating) return;
   markRemoteActivity("button press");
 
   switch (index) {
@@ -1269,6 +1286,10 @@ void runRandomPosition(const String& source) {
 }
 
 void handleBluetoothEvent(const remote_control::Event event) {
+  if (firmwareUpdating) {
+    if (event == remote_control::Event::Standby) firmwareUpdateCancel = true;
+    return;
+  }
   using remote_control::Event;
   constexpr char source[] = "Bluetooth remote";
   if (event == Event::Brighter || event == Event::Dimmer) {
@@ -1416,6 +1437,7 @@ void parsePositionLine(const String& line) {
 }
 
 void handleOctopusLine(const String& rawLine) {
+  if (handleFirmwareLine(rawLine)) { lastOctopusRxMs = millis(); return; }
   String line = rawLine;
   line.trim();
   if (!line.length()) return;
@@ -1696,6 +1718,7 @@ void handleNotFound() {
 }
 
 void handleMoveCommand(JsonObject axes, const int feed, const String& source) {
+  if (firmwareUpdating) return;
   String gcode = "G1";
   bool hasAxis = false;
 
@@ -1728,6 +1751,10 @@ void handleMoveCommand(JsonObject axes, const int feed, const String& source) {
 }
 
 void handleGcodeCommand(const String& gcode, const String& source) {
+  if (firmwareUpdating) {
+    if (gcodeIsImmediateStop(gcode)) firmwareUpdateCancel = true;
+    return;
+  }
   if (!gcode.length()) return;
   const String normalized = normalizedGcode(gcode);
   const String outgoing = normalized == "M215 H" ? String(kSpiderHomeCommand) : gcode;
@@ -1776,6 +1803,11 @@ void handleGcodeCommand(const String& gcode, const String& source) {
 }
 
 bool handleAction(const String& action, JsonVariantConst payload, const String& source) {
+  if (firmwareUpdating) {
+    if (action == "stop_motion") { firmwareUpdateCancel = true; return true; }
+    return false;
+  }
+  if (action == "standby") { handleBluetoothEvent(remote_control::Event::Standby); return true; }
   if (action == "light_on") {
     turnLightsOn(source, "Light ON request");
     return true;
@@ -2001,6 +2033,9 @@ void handleWsEvent(const uint8_t clientNum, const WStype_t type, uint8_t* payloa
 }
 
 void setupHttp() {
+  server.on("/network", HTTP_GET, handleNetworkPage);
+  server.on("/api/network", HTTP_GET, handleNetworkState);
+  server.on("/api/network", HTTP_POST, handleNetworkSave);
   server.on("/", HTTP_GET, handleRoot);
   server.on("/logo.jpg", HTTP_GET, handleLogo);
   server.on("/manifest.webmanifest", HTTP_GET, handleManifest);
@@ -2061,6 +2096,8 @@ void setupRfInputs() {
   logMessage(kBoardName, String("RF inputs will arm after startup automation completes and at least ") + (kRfInputArmDelayMs / 1000.0f) + "s have passed.");
 }
 
+#include "cloud_runtime.h"
+
 } // namespace
 
 void setup() {
@@ -2084,7 +2121,7 @@ void setup() {
   WiFi.setSleep(false);
   WiFi.setHostname(kBoardName);
 #endif
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(WIFI_AP_STA);
   WiFi.softAPdisconnect(true);
   delay(50);
   WiFi.softAPConfig(kApIp, kApGateway, kApSubnet);
@@ -2094,6 +2131,7 @@ void setup() {
   setupHttp();
   setupWebSocket();
   bluetooth_remote::begin();
+  beginCloud();
 
   logMessage(kBoardName, String("Access point ready at http://") + WiFi.softAPIP().toString());
   logMessage(kBoardName, "Lamp output delegated to Octopus M355 on the configured bed/heater output.");
@@ -2110,6 +2148,11 @@ void setup() {
 void loop() {
   // Hardware control and capability discovery run before optional browser I/O.
   readOctopusSerial();
+  if (firmwareUpdating) {
+    dnsServer.processNextRequest(); server.handleClient(); webSocket.loop();
+    pollRfButtons(); bluetooth_remote::poll(handleBluetoothEvent, broadcastBluetoothKeys);
+    tickRemoteUpdate(); tickCloud(); yield(); return;
+  }
   pollOctopusCapabilities();
   bluetooth_remote::poll(handleBluetoothEvent, broadcastBluetoothKeys);
   syncFanModeToOctopus();
@@ -2128,6 +2171,7 @@ void loop() {
   server.handleClient();
   webSocket.loop();
   pollWiFiStations();
+  tickCloud();
 
   const uint32_t now = millis();
   if (octopusResetVerifyPending && now >= octopusResetVerifyDeadlineMs) {

@@ -18,6 +18,7 @@
 # Compiled firmware and native build artifacts
 *.bin
 *.BIN
+!/firmware/*.bin
 *.cur
 *.CUR
 *.elf
@@ -73,6 +74,8 @@ Desktop.ini
 
 # Local notes that are not part of the public documentation
 /Docs/prompt
+/.local/
+**/.wrangler/
 
 # Optional upstream Marlin reference bundle (not used by Lumiac builds)
 /Marlin/MarlinConfigurations-2.1.2.6/

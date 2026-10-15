@@ -20,6 +20,7 @@
  *
  */
 #pragma once
+#include "lumiac_build.h"
 
 #define CONFIG_EXAMPLES_DIR "linear_axes/Octopus 8 LINEAR_AXES"
 
