@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 
-async function dashboard(patch = {}, online = true) {
+async function dashboard(patch = {}, online = true, fullUpdate = null) {
   const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   const dom = new JSDOM(html, { url: 'https://lumiac.control.timiac.it', runScripts: 'outside-only' });
   const requests = [], state = { controller: 'esp32', octopusOnline: true, homed: true,
@@ -13,7 +13,7 @@ async function dashboard(patch = {}, online = true) {
   dom.window.fetch = async (path, options = {}) => {
     requests.push({path, options});
     if (path.endsWith('/config')) return Response.json({deviceId: 'lumiac-01'});
-    if (path.endsWith('/status')) return Response.json({online, queued: 0, status: state});
+    if (path.endsWith('/status')) return Response.json({online, queued: 0, status: state, fullUpdate});
     if (path.endsWith('/firmware')) return Response.json({id: 'image-one'});
     return Response.json({id: 'request-one'});
   };
@@ -53,4 +53,21 @@ test('offline controllers cannot accept movement or updates', async () => {
   const f = await dashboard({}, false);
   assert.equal(f.$('stop').disabled, true); assert.equal(f.$('move').disabled, true);
   assert.match(f.$('connection').textContent, /offline/); f.dom.window.close();
+});
+
+
+test('Full update starts a server build with no individual file uploads', async () => {
+  const f = await dashboard();
+  assert.equal(f.$('full-update').disabled, false); await f.$('full-update').onclick();
+  const calls = f.requests.filter(r => r.path.endsWith('/full-update'));
+  assert.equal(calls.length, 1); assert.deepEqual(JSON.parse(calls[0].options.body), {});
+  assert.equal(f.requests.some(r => r.path.endsWith('/firmware') || r.path.endsWith('/updates')), false);
+  f.dom.window.close();
+});
+
+test('durable Full update status is restored after reopening the page', async () => {
+  const f = await dashboard({}, true, {state: 'building', steps: []});
+  assert.match(f.$('full-update-status').textContent, /Building all firmware/);
+  assert.equal(f.$('full-update').disabled, true); assert.equal(f.$('feed').disabled, true);
+  assert.equal(f.$('stop').disabled, false); f.dom.window.close();
 });

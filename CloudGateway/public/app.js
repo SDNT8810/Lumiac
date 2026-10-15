@@ -10,8 +10,8 @@ async function api(path, options = {}) {
 }
 function render(remote) {
   const state = remote.status || {}, ota = state.ota || {}, motion = state.motion || {};
-  const busy = uploading || !remote.online || ota.active || remote.queued > 0;
-  $('connection').textContent = !remote.online ? 'Lumiac is offline' : ota.active ? 'Firmware update in progress' : remote.queued ? 'Waiting for the controller to receive your command' : 'Connected to Lumiac';
+  const busy = ['building', 'installing'].includes(remote.fullUpdate?.state) || uploading || !remote.online || ota.active || remote.queued > 0;
+  $('connection').textContent = !remote.online ? 'Lumiac is offline' : ['building', 'installing'].includes(remote.fullUpdate?.state) ? 'Full update in progress. Stop is available.' : ota.active ? 'Firmware update in progress' : remote.queued ? 'Waiting for the controller to receive your command' : 'Connected to Lumiac';
   $('hardware').textContent = remote.online ? `${state.controller === 'esp12' ? 'ESP-12S' : 'ESP32'} · firmware ${state.software || 'unknown'}` : 'Connect the controller to its router using http://192.168.4.1/network on Lumiac Wi-Fi.';
   $('octopus-state').textContent = !state.octopusOnline ? 'Offline' : state.homing ? 'Homing' : state.homed ? 'Ready' : 'Home required';
   $('motion-state').textContent = motion.standby ? 'Standby' : motion.paused ? 'Paused' : motion.active ? 'Moving' : 'Stopped';
@@ -29,6 +29,19 @@ function render(remote) {
   for (const id of ['axis', 'position']) $(id).disabled = busy;
   if (!targetInitialized && state.controller) { $('firmware-target').value = state.controller + ':app'; targetInitialized = true; }
   $('install-firmware').disabled = busy || !ota.supported;
+  const full = remote.fullUpdate;
+  $('full-update-log').hidden = !full?.buildUrl;
+  if (full?.buildUrl) $('full-update-log').href = full.buildUrl;
+  const fullActive = ['building', 'installing'].includes(full?.state);
+  $('full-update').disabled = busy || fullActive || !state.ota?.supported;
+  const completed = full?.steps?.filter(step => step.state === 'complete').length || 0;
+  const current = full?.steps?.find(step => step.state !== 'complete');
+  $('full-update-status').textContent = !full ? 'Build all firmware and install it automatically. No files to select.'
+    : full.state === 'building' ? 'Building all firmware. This can take several minutes. You may close this page.'
+    : full.state === 'installing' ? `Installing ${completed + 1}/${full.steps.length}: ${current?.target || ''} ${current?.kind === 'filesystem' ? 'dashboard' : ''}. Keep power connected.`
+    : full.state === 'complete' ? full.validate_only ? 'Build verified. No hardware was updated.' : 'Full update complete. Calibrate/Home the arms before resuming.'
+    : `Full update ${full.state}: ${full.error || 'Check the connection and try again.'}`;
+  $('full-update-status').classList.toggle('error', full?.state === 'failed');
   const job = remote.update;
   $('firmware-status').textContent = !ota.supported ? 'Install the initial USB/SD update package first.'
     : job && job.id !== ota.id ? `Update ${job.state}${job.error ? ': ' + job.error : ''}`
@@ -71,3 +84,13 @@ $('firmware-form').onsubmit = async event => {
 };
 $('sign-out').onclick = async () => { try { await api('/api/logout', { method: 'POST' }); login(); } catch (error) { say(error.message, true); } };
 start().catch(error => login(error.message === 'Please sign in' ? '' : error.message));
+
+$('full-update').onclick = async () => {
+  $('full-update').disabled = true;
+  uploading = true;
+  try {
+    await api('/api/devices/' + config.deviceId + '/full-update', { method: 'POST', body: '{}' });
+    say('Building all firmware. Updates will install automatically when the build succeeds.');
+  } catch (error) { say(error.message, true); }
+  finally { uploading = false; await refresh(); }
+};

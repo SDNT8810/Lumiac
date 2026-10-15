@@ -1,3 +1,4 @@
+import { fullUpdateApi, fullUpdateState, fullUpdateActive, cancelFullUpdate, advanceFullUpdate } from './full-update.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { firmwareApi, firmwareDownload, syncFirmware } from './firmware.js';
 import { validateAction } from './actions.js';
@@ -80,12 +81,13 @@ async function authenticateDevice(request, env) {
 }
 async function deviceState(env, now) {
   const row = await env.DB.prepare('SELECT status, updated_at FROM devices WHERE id = ?').bind(env.LUMIAC_DEVICE_ID).first();
-  if (!row) return { online: false, updatedAt: '', status: null, queued: 0 };
+  const fullUpdate = await fullUpdateState(env, now);
+  if (!row) return { online: false, updatedAt: '', status: null, queued: 0, ...(fullUpdate ? { fullUpdate } : {}) };
   const pending = await env.DB.prepare("SELECT COUNT(*) AS count FROM actions WHERE device_id = ? AND state = 'queued' AND expires_at > ?")
     .bind(env.LUMIAC_DEVICE_ID, now).first();
   const updates = await env.DB.prepare("SELECT COUNT(*) AS count FROM ota_jobs WHERE device_id = ? AND state IN ('queued','delivered') AND expires_at > ?").bind(env.LUMIAC_DEVICE_ID, now).first();
   const update = await env.DB.prepare('SELECT id, state, error FROM ota_jobs WHERE device_id = ? ORDER BY created_at DESC LIMIT 1').bind(env.LUMIAC_DEVICE_ID).first();
-  return { online: now - row.updated_at <= ONLINE_MS, updatedAt: new Date(row.updated_at).toISOString(), status: JSON.parse(row.status), queued: pending.count + updates.count, update };
+  return { online: now - row.updated_at <= ONLINE_MS, updatedAt: new Date(row.updated_at).toISOString(), status: JSON.parse(row.status), queued: pending.count + updates.count, update, ...(fullUpdate ? { fullUpdate } : {}) };
 }
 
 export function createGateway({ verifyToken = verifyFirebaseToken, upstream = fetch, clock = Date.now } = {}) {
@@ -119,6 +121,11 @@ export function createGateway({ verifyToken = verifyFirebaseToken, upstream = fe
         }
         if (pathname === '/api/session' && request.method === 'GET')
           return protect(json({ username: await administrator(request, env, verifyToken) }));
+        const fullResponse = await fullUpdateApi(request, env, {
+          administrator: () => administrator(request, env, verifyToken), checkOrigin: () => checkOrigin(request, env),
+          readJson: () => readJson(request, 2048), deviceState: () => deviceState(env, now), now, upstream,
+        });
+        if (fullResponse) return protect(fullResponse);
         const firmwareResponse = await firmwareApi(request, env, {
           administrator: () => administrator(request, env, verifyToken), checkOrigin: () => checkOrigin(request, env),
           readJson: () => readJson(request, 2048), deviceState: () => deviceState(env, now), now,
@@ -138,12 +145,14 @@ export function createGateway({ verifyToken = verifyFirebaseToken, upstream = fe
             const remote = await deviceState(env, now);
             if (!remote.online || !remote.status?.session) throw failure('The master is offline. Reconnect it before sending a command', 409);
             const state = remote.status;
+            if (body.type === 'stop') await cancelFullUpdate(env, now);
+            else if (fullUpdateActive(remote.fullUpdate)) throw failure('Full update is in progress. Stop is available.', 409);
             if (body.type !== 'stop' && (remote.queued || state.ota?.active))
               throw failure('Wait for the queued command or firmware update to finish', 409);
             const id = crypto.randomUUID();
             // The INSERT checks the queue size atomically to reject races.
             const queued = await env.DB.prepare('INSERT INTO actions(id, device_id, type, payload, session, requested_by, created_at, expires_at) ' +
-              "SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM actions WHERE device_id = ? AND state = 'queued' AND expires_at > ?) < ? AND (?=1 OR NOT EXISTS(SELECT 1 FROM ota_jobs WHERE state IN ('queued','delivered') AND expires_at>?))")
+              "SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM actions WHERE device_id = ? AND state = 'queued' AND expires_at > ?) < ? AND (?=1 OR (NOT EXISTS(SELECT 1 FROM ota_jobs WHERE state IN ('queued','delivered') AND expires_at>?) AND NOT EXISTS(SELECT 1 FROM full_updates WHERE state IN ('building','installing'))))")
               .bind(id, env.LUMIAC_DEVICE_ID, body.type, JSON.stringify(payload),
                 state.session, username, now, now + ACTION_MS, env.LUMIAC_DEVICE_ID, now, body.type === 'stop' ? 10 : 1, body.type === 'stop' ? 1 : 0, now).run();
             if (!queued.meta.changes) throw failure('Another command is already queued', 409);
@@ -175,11 +184,11 @@ export function createGateway({ verifyToken = verifyFirebaseToken, upstream = fe
           // boot session. Keep only one day of receipts for diagnostics.
           await env.DB.prepare('DELETE FROM actions WHERE expires_at <= ? OR (device_id = ? AND session != ?)')
             .bind(now - 86400000, env.LUMIAC_DEVICE_ID, status.session).run();
-          const update = await syncFirmware(env, status, now, action);
+          const update = await syncFirmware(env, status, now, action, () => advanceFullUpdate(env, status, now));
           const outgoing = action ? { ...JSON.parse(action.payload), id: action.id, type: action.type, session: action.session } : null;
           return protect(json(update ? { action: outgoing, update } : { action: outgoing }));
         }
-        if (pathname.startsWith('/api/') || pathname.startsWith('/device/')) throw failure('Not found', 404);
+        if (pathname.startsWith('/api/') || pathname.startsWith('/device/') || pathname.startsWith('/build/')) throw failure('Not found', 404);
         if (!['GET', 'HEAD'].includes(request.method)) throw failure('Method not allowed', 405);
         return protect(await env.ASSETS.fetch(request));
       } catch (error) {

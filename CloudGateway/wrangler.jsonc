@@ -6,15 +6,32 @@
   "account_id": "b9481989c8860f15e84a010c88d2f2b4",
   "workers_dev": false,
   "preview_urls": false,
-  "routes": [{ "pattern": "lumiac.control.timiac.it", "custom_domain": true }],
-  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
-  "d1_databases": [{ "binding": "DB", "database_name": "lumiac-control", "database_id": "e4ced63b-10a8-42c7-9912-e53c9011dd11" }],
+  "routes": [
+    {
+      "pattern": "lumiac.control.timiac.it",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "lumiac-control",
+      "database_id": "e4ced63b-10a8-42c7-9912-e53c9011dd11"
+    }
+  ],
   "vars": {
     "LUMIAC_PUBLIC_ORIGIN": "https://lumiac.control.timiac.it",
     "LUMIAC_DEVICE_ID": "lumiac-01",
     "LUMIAC_ADMIN_USERNAME": "Andrea",
     "LUMIAC_ADMIN_EMAIL": "andrea@timiac.it",
     "LUMIAC_ADMIN_UID": "andrea",
-    "FIREBASE_PROJECT_ID": "timiac-control-20261008"
+    "FIREBASE_PROJECT_ID": "timiac-control-20261008",
+    "GITHUB_REPOSITORY": "SDNT8810/Lumiac",
+    "GITHUB_REF": "RF"
   }
 }
