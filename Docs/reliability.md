@@ -31,3 +31,25 @@ fibers; this does not replace an endurance run on the physical ESP and mechanics
 `RF` retains the existing gearbox calibration. A controller from `onetoone`
 reports that branch, so the same remote panel builds its matching branch for
 Full update. Old firmware without a branch field continues to use `RF`.
+
+## ESP-12S connection correction, 2026-10-16.3
+
+`HTTPS status -1` was the HTTP client's connection-failure code, not a response
+from the gateway. The initial short network deadlines could reject a slow Wi-Fi
+connection. Sync and parked firmware downloads now share a 10-second ESP32 TCP
+deadline, 20-second ESP32 TLS deadline and 15-second HTTP deadline. On ESP8266 the
+HTTP timeout also covers TCP connection setup; BearSSL allows its normal
+15-second handshake. The ESP-12S CPU runs at its supported 160 MHz setting to
+reduce certificate-verification time. Control still runs independently of HTTPS.
+Sync sends its existing status bytes directly instead of allocating a second
+copy of the packet while BearSSL holds its handshake buffers.
+
+Failures now include the TLS library's actual reason when available. The local
+network page's Connection details shows firmware, free memory, router gateway,
+DNS, signal level and UTC time. This helps distinguish memory, routing, time and
+certificate failures. Certificate verification stays enabled.
+
+The live gateway, bundled CA chain with TLS 1.2, and configured device key were
+verified from this PC. A successful handshake from the physical ESP-12S still
+needs confirmation after installing the new ESP firmware. Octopus calibration
+and machine identity do not change with this correction.
