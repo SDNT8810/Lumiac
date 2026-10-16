@@ -21,8 +21,9 @@ constexpr uint8_t kDimmerPin = 16; // Polling required: GPIO16 has no GPIO inter
 constexpr uint8_t kPos3Pin = 15;   // Boot strap: RF output must be LOW during boot.
 constexpr uint8_t kReservePin = kUnusedPin;
 constexpr uint8_t kApMaxConnections = 4;
-constexpr size_t kLogHistorySize = 32;
-constexpr size_t kLogReplayLimit = 12;
+// Leave room for the independent cloud stack and the verified TLS handshake.
+constexpr size_t kLogHistorySize = 16;
+constexpr size_t kLogReplayLimit = 8;
 constexpr uint32_t kLowHeapThresholdBytes = 8000;
 #elif defined(ESP32)
 constexpr char kName[] = "ESP_RF_Octopus";

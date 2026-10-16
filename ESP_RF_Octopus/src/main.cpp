@@ -18,6 +18,10 @@
 #include "remote_feedback.h"
 #include "cloud_platform.h"
 
+#if defined(ESP32)
+SET_LOOP_TASK_STACK_SIZE(12288);
+#endif
+
 namespace {
 
 using namespace board;
@@ -30,6 +34,8 @@ void beginCloud();
 void tickCloud();
 void tickRemoteUpdate();
 void clearFirmwarePark();
+void recordControlFault(const String& reason);
+bool cloudTransportBusy();
 void handleNetworkPage();
 void handleNetworkSave();
 void handleNetworkState();
@@ -266,7 +272,7 @@ constexpr ButtonInterruptHandler kRfInterruptHandlers[kButtonCount] = {
 
 void beginOctopusSerial() {
 #if defined(ESP8266)
-  octopusSerial.setRxBufferSize(1024);
+  octopusSerial.setRxBufferSize(2048);
   octopusSerial.begin(kOctopusBaud);
   octopusSerial.setDebugOutput(false);
   // Terminate any partial line left by the ESP8266 ROM's boot output.
@@ -1441,6 +1447,13 @@ void handleOctopusLine(const String& rawLine) {
   String line = rawLine;
   line.trim();
   if (!line.length()) return;
+  if (line == "start" && !firmwareUpdating && (octopusOnline || octopusHomed || embeddedPlayback.program)) {
+    recordControlFault("Octopus restarted; home required");
+    clearDesiredSpiderLoop(); stopEmbeddedProgram();
+    cancelStartupAutomation(kBoardName, "unexpected Octopus restart");
+    octopusHomed = octopusFirmwareReady = octopusRealtime = octopusMotionFan = false;
+    broadcastStatus("Octopus restarted. Home the arms before moving.");
+  }
   if (line == "Cap:LUMIAC_REALTIME:1") octopusRealtime = true;
   if (line == "Cap:LUMIAC_FAN:1") {
     octopusMotionFan = true;
@@ -1465,6 +1478,7 @@ void handleOctopusLine(const String& rawLine) {
   parseLampStateLine(line);
   parsePositionLine(line);
   if (embeddedPlayback.program && (line.startsWith("Error:") || line.startsWith("Resend:"))) {
+    recordControlFault("Octopus command error: " + line);
     clearDesiredSpiderLoop();
     stopEmbeddedProgram();
     sendToOctopus("M410", kBoardName, false);
@@ -1649,6 +1663,8 @@ void healthCheck() {
   const uint32_t now = millis();
   if (now - lastHealthCheckMs < kHealthCheckMs) return;
   lastHealthCheckMs = now;
+  // TLS allocates temporary buffers; sample retained heap after they are freed.
+  if (cloudTransportBusy()) return;
 
   const uint32_t freeHeap = ESP.getFreeHeap();
   if (freeHeap >= kLowHeapThresholdBytes) {
@@ -1661,23 +1677,27 @@ void healthCheck() {
   if (lowHeapStrikeCount < kLowHeapStrikeLimit) return;
 
   logMessage(kBoardName, "Heap remained critically low. Restarting ESP_RF_Octopus for self-recovery.");
+  recordControlFault("Controller restarted after persistent low heap");
   delay(100);
   ESP.restart();
 }
 
 void readOctopusSerial() {
+  static bool droppingLine = false;
   while (octopusSerial.available()) {
     const char c = static_cast<char>(octopusSerial.read());
     if (c == '\r') continue;
 
     if (c == '\n') {
-      handleOctopusLine(serialLine);
+      if (!droppingLine) handleOctopusLine(serialLine);
+      droppingLine = false;
       serialLine = "";
       continue;
     }
 
-    if (serialLine.length() < kSerialLineMax)
+    if (!droppingLine && serialLine.length() < kSerialLineMax)
       serialLine += c;
+    else droppingLine = true; // Never interpret a truncated error or completion fence.
   }
 }
 
@@ -2173,6 +2193,9 @@ void loop() {
   pollWiFiStations();
   tickCloud();
 
+  // Browser I/O can yield too: process queued replies before checking deadlines.
+  readOctopusSerial();
+
   const uint32_t now = millis();
   if (octopusResetVerifyPending && now >= octopusResetVerifyDeadlineMs) {
     octopusResetVerifyPending = false;
@@ -2187,6 +2210,7 @@ void loop() {
     lastFanMode = -1;
     reachedPreset = 0;
     logMessage(kBoardName, "Octopus serial RX heartbeat timed out.");
+    recordControlFault("Octopus serial RX heartbeat timed out");
     broadcastState();
   }
 

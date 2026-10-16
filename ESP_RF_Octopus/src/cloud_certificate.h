@@ -1,7 +1,7 @@
 #pragma once
 // Google Trust Services GTS Root R1 and R4 (https://pki.goog/repository/).
 // The deployed Cloudflare certificate chains to R4; never disable verification.
-constexpr char kCloudRunRootCa[] = R"CERT(-----BEGIN CERTIFICATE-----
+constexpr char kCloudRunRootCa[] PROGMEM = R"CERT(-----BEGIN CERTIFICATE-----
 MIIFVzCCAz+gAwIBAgINAgPlk28xsBNJiGuiFzANBgkqhkiG9w0BAQwFADBHMQsw
 CQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEU
 MBIGA1UEAxMLR1RTIFJvb3QgUjEwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAw

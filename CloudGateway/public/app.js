@@ -10,6 +10,7 @@ async function api(path, options = {}) {
 }
 function render(remote) {
   const state = remote.status || {}, ota = state.ota || {}, motion = state.motion || {};
+  $('reliability').textContent = state.reliability?.lastFault ? 'Last interruption: ' + state.reliability.lastFault : '';
   const busy = ['building', 'installing'].includes(remote.fullUpdate?.state) || uploading || !remote.online || ota.active || remote.queued > 0;
   $('connection').textContent = !remote.online ? 'Lumiac is offline' : ['building', 'installing'].includes(remote.fullUpdate?.state) ? 'Full update in progress. Stop is available.' : ota.active ? 'Firmware update in progress' : remote.queued ? 'Waiting for the controller to receive your command' : 'Connected to Lumiac';
   $('hardware').textContent = remote.online ? `${state.controller === 'esp12' ? 'ESP-12S' : 'ESP32'} · firmware ${state.software || 'unknown'}` : 'Connect the controller to its router using http://192.168.4.1/network on Lumiac Wi-Fi.';

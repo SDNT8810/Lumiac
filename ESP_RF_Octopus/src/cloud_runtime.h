@@ -24,12 +24,19 @@ BearSSL::X509List cloudRoots(kCloudRunRootCa);
 WiFiClientSecure cloudTls;
 #endif
 HTTPClient cloudHttp;
+#include "cloud_transport.h"
+bool cloudTransportReady = false;
+uint32_t cloudPollInterval = 5000, cloudFailures = 0, cloudLastElapsed = 0;
+String lastControlFault, controllerResetReason;
+uint32_t controlFaultCount = 0, controlFaultAt = 0;
+bool cloudTransportBusy() { return cloudInFlight; }
 
 bool saveCloudSettings() {
   if (!cloudStorageReady) return false;
   JsonDocument doc;
   doc["ssid"] = cloudSsid; doc["password"] = cloudPassword;
   doc["parked"] = firmwareParked; doc["pending"] = pendingUpdateBoot;
+  doc["lastFault"] = lastControlFault; doc["faultCount"] = controlFaultCount;
   if (pendingUpdateBoot) {
     doc["job"] = remoteUpdate.id; doc["target"] = remoteUpdate.target;
     doc["hash"] = remoteUpdate.sha256; doc["revision"] = remoteUpdate.revision;
@@ -55,11 +62,22 @@ void clearFirmwarePark() {
   firmwareParked = false;
   if (!saveCloudSettings()) firmwareParked = true;
 }
+void recordControlFault(const String& reason) {
+  lastControlFault = reason; controlFaultAt = millis(); ++controlFaultCount;
+  saveCloudSettings();
+}
 void writeRemoteState(JsonDocument& doc) {
   doc["session"] = cloudBoot; doc["controller"] = kControllerRole;
   doc["software"] = LUMIAC_FIRMWARE_REVISION; doc["firmware"] = LUMIAC_FIRMWARE_ID;
+  doc["sourceBranch"] = LUMIAC_FIRMWARE_BRANCH;
   doc["homed"] = octopusHomed; doc["homing"] = startupHomeInProgress || embeddedPlayback.waitingForHome;
   doc["octopusSoftware"] = octopusCloudRevision;
+  JsonObject reliability = doc["reliability"].to<JsonObject>();
+  reliability["lastFault"] = lastControlFault; reliability["faultCount"] = controlFaultCount;
+  reliability["faultAtMs"] = controlFaultAt; reliability["resetReason"] = controllerResetReason;
+  reliability["uptimeMs"] = millis(); reliability["freeHeap"] = ESP.getFreeHeap();
+  reliability["cloudBusy"] = cloudInFlight; reliability["cloudFailures"] = cloudFailures;
+  reliability["cloudRequestMs"] = cloudLastElapsed;
   JsonObject wifi = doc["wifi"].to<JsonObject>();
   wifi["ssid"] = cloudSsid; wifi["connected"] = WiFi.status() == WL_CONNECTED;
   wifi["ip"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String();
@@ -83,6 +101,7 @@ bool openCloudHttp(const String& path) {
   cloudTls.setTimeout(3000);
 #else
   cloudTls.setCACert(kCloudRunRootCa); cloudHttp.setConnectTimeout(2500);
+  cloudTls.setHandshakeTimeout(3);
 #endif
   cloudHttp.setTimeout(4000); cloudHttp.setReuse(false); cloudHttp.useHTTP10(true);
   if (!cloudHttp.begin(cloudTls, String(LUMIAC_CLOUD_URL) + path)) return false;
@@ -138,6 +157,7 @@ void startRemoteUpdate(JsonVariantConst job) {
   octopusSerial.println("M400"); octopusSerial.println("M118 " + updateIdleMarker);
 }
 bool startFirmwareDownload() {
+  if (cloudInFlight) return false; // Wait until the sync worker has released TLS.
   if (remoteUpdate.kind == "app") {
     pendingUpdateBoot = true;
     if (!saveCloudSettings()) { failRemoteUpdate("Cannot save the reboot receipt"); return false; }
@@ -253,33 +273,56 @@ void executeCloudAction(JsonVariantConst action) {
 }
 void tickCloud() {
   const uint32_t now = millis();
+  serviceCloudTransport();
+  if (CloudExchange* reply = takeCloudExchange()) {
+    cloudInFlight = false; cloudLastElapsed = reply->elapsed;
+    JsonDocument packet;
+    if (reply->error.isEmpty() && deserializeJson(packet, reply->response, DeserializationOption::NestingLimit(8)))
+      reply->error = "Invalid gateway response";
+    if (reply->error.isEmpty()) {
+      cloudState = "connected"; cloudError = ""; cloudPollInterval = 5000;
+      if (!packet["action"].isNull()) executeCloudAction(packet["action"]);
+      if (!packet["update"].isNull()) startRemoteUpdate(packet["update"]);
+    } else {
+      cloudState = "gateway unavailable"; cloudError = reply->error; ++cloudFailures;
+      cloudPollInterval = min(uint32_t(60000), cloudPollInterval * 2);
+    }
+    delete reply; lastCloudPoll = millis();
+  }
   if (cloudSsid.isEmpty()) return;
+  if (cloudInFlight) return;
   if (WiFi.status() != WL_CONNECTED) {
     cloudState = "connecting to Wi-Fi";
     if (now - lastWifiAttempt > 20000) { lastWifiAttempt = now; WiFi.begin(cloudSsid.c_str(), cloudPassword.c_str()); }
     return;
   }
   if (time(nullptr) < 1700000000) { cloudState = "waiting for internet time"; return; }
-  // ESP8266 uses one TLS connection: finish its download before polling again.
-  if (remoteUpdate.state == "downloading" || updateRebootAt || (lastCloudPoll && now - lastCloudPoll < 5000)) return;
+  // OTA owns HTTPS exclusively while downloading, and only runs with motion parked.
+  if (remoteUpdate.state == "downloading" || updateRebootAt || (lastCloudPoll && now - lastCloudPoll < cloudPollInterval)) return;
   lastCloudPoll = now;
-  JsonDocument packet; fillStateDocument(packet);
-  String payload; serializeJson(packet, payload); packet.clear();
-  payload = "{\"status\":" + payload + "}";
-  if (!openCloudHttp("/device/v1/devices/" LUMIAC_CLOUD_DEVICE_ID "/sync")) { cloudError = "Cannot open remote gateway"; return; }
-  cloudHttp.addHeader("Content-Type", "application/json");
-  const int code = cloudHttp.POST(payload); payload = "";
-  if (code != 200) {
-    cloudState = "gateway unavailable"; cloudError = "HTTPS status " + String(code); closeCloudHttp(); return;
+  if (!cloudTransportReady) { cloudError = "Cloud worker unavailable"; return; }
+#if defined(ESP8266)
+  if (ESP.getFreeHeap() < 28000 || ESP.getMaxFreeBlockSize() < 18000) {
+#else
+  if (ESP.getFreeHeap() < 50000) {
+#endif
+    cloudError = "Cloud sync deferred: low free memory"; return;
   }
-  const String response = cloudHttp.getString(); closeCloudHttp();
-  if (deserializeJson(packet, response)) { cloudState = "invalid gateway response"; return; }
-  cloudState = "connected"; cloudError = "";
-  if (!packet["action"].isNull()) executeCloudAction(packet["action"]);
-  if (!packet["update"].isNull()) startRemoteUpdate(packet["update"]);
+  JsonDocument packet; fillStateDocument(packet);
+  CloudExchange* exchange = new (std::nothrow) CloudExchange;
+  if (!exchange) { cloudError = "Cloud sync deferred: low free memory"; return; }
+  exchange->payload = "{\"status\":"; serializeJson(packet, exchange->payload); exchange->payload += '}';
+  if (submitCloudExchange(exchange)) cloudInFlight = true;
+  else { delete exchange; cloudError = "Cloud worker busy"; }
 }
 
 void beginCloud() {
+  cloudTransportReady = configureCloudTransport();
+#if defined(ESP8266)
+  controllerResetReason = ESP.getResetReason();
+#else
+  controllerResetReason = String(unsigned(esp_reset_reason()));
+#endif
   cloudBoot = WiFi.macAddress() + "-" + String(micros(), HEX) + "-" + String(random(0x7fffffff), HEX);
 #if defined(ESP8266)
   cloudStorageReady = LUMIAC_FS.begin();
@@ -294,6 +337,7 @@ void beginCloud() {
       if (!deserializeJson(saved, file)) {
         cloudSsid = saved["ssid"] | ""; cloudPassword = saved["password"] | "";
         firmwareParked = saved["parked"] | false;
+        lastControlFault = saved["lastFault"] | ""; controlFaultCount = saved["faultCount"] | 0U;
         if (saved["pending"] == true) {
           remoteUpdate.id = saved["job"].as<String>(); remoteUpdate.sha256 = saved["hash"].as<String>();
           remoteUpdate.target = saved["target"].as<String>(); remoteUpdate.kind = "app";

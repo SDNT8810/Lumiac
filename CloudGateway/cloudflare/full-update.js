@@ -82,7 +82,11 @@ export async function fullUpdateApi(request, env, { administrator, checkOrigin, 
     }
     const current = await fullUpdateState(env, now);
     if (fullUpdateActive(current)) throw fail('A full update is already in progress', 409);
-    const commit = await github(env, upstream, '/commits/' + encodeURIComponent(env.GITHUB_REF));
+    // Existing controllers without a branch field use the normal RF release.
+    // Direct-drive controllers must keep building their matching calibration.
+    const sourceRef = family(env) === 'LUMIAC' ? (remote.status?.sourceBranch || env.GITHUB_REF) : env.GITHUB_REF;
+    if (family(env) === 'LUMIAC' && !['RF', 'onetoone'].includes(sourceRef)) throw fail('Unknown firmware source branch', 409);
+    const commit = await github(env, upstream, '/commits/' + encodeURIComponent(sourceRef));
     if (!/^[a-f0-9]{40}$/.test(commit?.sha || '')) throw fail('Could not identify the source revision', 502);
     const id = crypto.randomUUID();
     const inserted = await env.DB.prepare(`INSERT INTO full_updates(id,device_id,state,error,source_sha,controller,validate_only,created_at,updated_at,expires_at) SELECT ?,?,'building','',?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM full_updates WHERE ${active}) AND NOT EXISTS(SELECT 1 FROM ota_jobs WHERE state IN ('queued','delivered') AND expires_at>?) AND NOT EXISTS(SELECT 1 FROM actions WHERE state='queued' AND expires_at>?)`)
@@ -93,7 +97,7 @@ export async function fullUpdateApi(request, env, { administrator, checkOrigin, 
     if (!validateOnly) await env.DB.prepare("INSERT INTO actions(id,device_id,type,session,requested_by,created_at,expires_at) SELECT ?,?,'stop',?,'full-update',?,? WHERE EXISTS(SELECT 1 FROM full_updates WHERE id=? AND state='building')")
       .bind(crypto.randomUUID(), device(env), remote.status.session, now, now + 60000, id).run();
     try {
-      await github(env, upstream, '/actions/workflows/full-update.yml/dispatches', { ref: env.GITHUB_REF, inputs: { update_id: id, source_sha: commit.sha } });
+      await github(env, upstream, '/actions/workflows/full-update.yml/dispatches', { ref: sourceRef, inputs: { update_id: id, source_sha: commit.sha } });
     } catch (error) {
       await env.DB.prepare("UPDATE full_updates SET state='failed',error=?,updated_at=? WHERE id=? AND state='building'").bind(error.message, now, id).run();
       throw error;

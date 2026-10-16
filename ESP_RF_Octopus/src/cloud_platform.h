@@ -1,15 +1,21 @@
 #pragma once
 #include <time.h>
+#include <new>
 #if defined(ESP8266)
 #include <LittleFS.h>
 #define LUMIAC_FS LittleFS
 #include <ESP8266HTTPClient.h>
 #include <WiFiClientSecureBearSSL.h>
+extern "C" {
+#include <cont.h>
+}
 #else
 #include <SPIFFS.h>
 #define LUMIAC_FS SPIFFS
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include <freertos/queue.h>
+#include <esp_system.h>
 #endif
 #include "cloud_config.h"
 #include "build_version.h"

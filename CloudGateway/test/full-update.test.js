@@ -25,13 +25,13 @@ function fixture(t, controller = 'esp32') {
     [`${family}_DEVICE_KEY`]: 'device-secret', [`${family}_ADMIN_USERNAME`]: 'Andrea',
     [`${family}_ADMIN_EMAIL`]: 'andrea@example.com', [`${family}_ADMIN_UID`]: 'andrea',
     GITHUB_REPOSITORY: 'owner/project', GITHUB_REF: timiac ? 'main' : 'RF', GITHUB_BUILD_TOKEN: 'github-secret', FIRMWARE_BUILD_KEY: 'build-secret' };
-  const dispatches = [];
+  const dispatches = [], sourceRequests = [];
   const gateway = createGateway({ clock: () => now, verifyToken: async token => {
     if (token !== 'admin') throw Error('Invalid token');
     return { sub: 'andrea', email: 'andrea@example.com', firebase: { sign_in_provider: 'password' } };
   }, upstream: async (url, options) => {
     assert.equal(options.headers.Authorization, 'Bearer github-secret');
-    if (url.includes('/commits/')) return Response.json({ sha });
+    if (url.includes('/commits/')) { sourceRequests.push(url); return Response.json({ sha }); }
     assert.ok(url.endsWith('/actions/workflows/full-update.yml/dispatches'));
     dispatches.push(JSON.parse(options.body)); return new Response(null, { status: 204 });
   } });
@@ -66,8 +66,18 @@ function fixture(t, controller = 'esp32') {
   };
   const bundle = async id => { for (const component of components) await upload(id, component); };
   const full = async () => (await (await call('/api/devices/clock/full-update')).json()).update;
-  return { db, env, call, state, sync, begin, build, upload, bundle, full, dispatches, advance: ms => { now += ms; } };
+  return { db, env, call, state, sync, begin, build, upload, bundle, full, dispatches, sourceRequests, advance: ms => { now += ms; } };
 }
+
+test('full update builds the installed Lumiac calibration branch and rejects unknown branches', async t => {
+  if (timiac) return;
+  const f = fixture(t); f.state.sourceBranch = 'onetoone'; await f.sync(); await f.begin({validateOnly: true});
+  assert.ok(f.sourceRequests[0].endsWith('/commits/onetoone'));
+  assert.equal(f.dispatches[0].ref, 'onetoone');
+  const bad = fixture(t); bad.state.sourceBranch = 'unexpected'; await bad.sync();
+  assert.equal((await bad.call('/api/devices/clock/full-update', {})).status, 409);
+  assert.equal(bad.dispatches.length, 0);
+});
 
 test('Full update requires admin, same origin, Internet and initial OTA installation', async t => {
   const f = fixture(t);

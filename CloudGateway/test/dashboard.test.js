@@ -31,6 +31,13 @@ test('the real dashboard enables connected controls and shows actual position da
   assert.equal(JSON.parse(f.requests.find(r => r.path.endsWith('/actions')).options.body).type, 'pos3');
   f.dom.window.close();
 });
+
+test('last interruption remains visible after the controller recovers', async () => {
+  const f = await dashboard({reliability: {lastFault: 'Octopus restarted; home required'}});
+  assert.match(f.$('reliability').textContent, /Octopus restarted/);
+  assert.equal(f.$('stop').disabled, false);
+  f.dom.window.close();
+});
 test('updates block motion and settings while Stop remains available', async () => {
   const f = await dashboard({ota: {supported: true, active: true, id: 'job', phase: 'verifying SD', size: 100, done: 50}});
   assert.ok([...f.dom.window.document.querySelectorAll('[data-action]')].every(button => button.disabled));
