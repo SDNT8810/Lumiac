@@ -76,11 +76,16 @@ void writeRemoteState(JsonDocument& doc) {
   reliability["lastFault"] = lastControlFault; reliability["faultCount"] = controlFaultCount;
   reliability["faultAtMs"] = controlFaultAt; reliability["resetReason"] = controllerResetReason;
   reliability["uptimeMs"] = millis(); reliability["freeHeap"] = ESP.getFreeHeap();
+#if defined(ESP8266)
+  reliability["largestHeapBlock"] = ESP.getMaxFreeBlockSize();
+#endif
   reliability["cloudBusy"] = cloudInFlight; reliability["cloudFailures"] = cloudFailures;
   reliability["cloudRequestMs"] = cloudLastElapsed;
   JsonObject wifi = doc["wifi"].to<JsonObject>();
   wifi["ssid"] = cloudSsid; wifi["connected"] = WiFi.status() == WL_CONNECTED;
   wifi["ip"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String();
+  wifi["gateway"] = WiFi.gatewayIP().toString(); wifi["dns"] = WiFi.dnsIP().toString();
+  wifi["rssi"] = WiFi.RSSI(); wifi["utcEpoch"] = time(nullptr);
   wifi["cloud"] = cloudState; wifi["error"] = cloudError;
   JsonObject ota = doc["ota"].to<JsonObject>();
   ota["supported"] = cloudStorageReady; ota["sdSupported"] = octopusSdOta;
@@ -96,14 +101,7 @@ void writeRemoteState(JsonDocument& doc) {
 void closeCloudHttp() { cloudHttp.end(); cloudTls.stop(); }
 bool openCloudHttp(const String& path) {
   closeCloudHttp();
-#if defined(ESP8266)
-  cloudTls.setTrustAnchors(&cloudRoots); cloudTls.setSession(&cloudTlsSession);
-  cloudTls.setTimeout(3000);
-#else
-  cloudTls.setCACert(kCloudRunRootCa); cloudHttp.setConnectTimeout(2500);
-  cloudTls.setHandshakeTimeout(3);
-#endif
-  cloudHttp.setTimeout(4000); cloudHttp.setReuse(false); cloudHttp.useHTTP10(true);
+  configureCloudConnection(cloudTls, cloudHttp);
   if (!cloudHttp.begin(cloudTls, String(LUMIAC_CLOUD_URL) + path)) return false;
   cloudHttp.setUserAgent("Lumiac-Controller/1.0");
   cloudHttp.addHeader("X-Lumiac-Device-Key", LUMIAC_CLOUD_DEVICE_KEY);
@@ -162,9 +160,13 @@ bool startFirmwareDownload() {
     pendingUpdateBoot = true;
     if (!saveCloudSettings()) { failRemoteUpdate("Cannot save the reboot receipt"); return false; }
   }
-  if (!openCloudHttp("/device/v1/devices/" LUMIAC_CLOUD_DEVICE_ID "/firmware/" + remoteUpdate.imageId) ||
-      cloudHttp.GET() != 200 || cloudHttp.getSize() != int(remoteUpdate.size)) {
-    failRemoteUpdate("Firmware download rejected or length mismatch"); return false;
+  if (!openCloudHttp("/device/v1/devices/" LUMIAC_CLOUD_DEVICE_ID "/firmware/" + remoteUpdate.imageId)) {
+    failRemoteUpdate("Cannot open the firmware gateway"); return false;
+  }
+  const int code = cloudHttp.GET();
+  if (code != 200) { failRemoteUpdate(cloudConnectionError(cloudTls, code)); return false; }
+  if (cloudHttp.getSize() != int(remoteUpdate.size)) {
+    failRemoteUpdate("Firmware download length mismatch"); return false;
   }
   if (!cloudWriter.begin(remoteUpdate.kind, remoteUpdate.size, remoteUpdate.sha256)) {
     failRemoteUpdate(cloudWriter.error); return false;
@@ -374,7 +376,8 @@ void handleNetworkPage() {
 <title>Lumiac Internet connection</title><style>body{font:17px system-ui;max-width:600px;margin:40px auto;padding:20px;background:#e9e4da;color:#263831}label,input,button{display:block;margin:12px 0}input,button{padding:12px;font:inherit}input{width:90%}a{color:inherit}</style>
 <h1>Lumiac remote access</h1><p>Connect this controller to a 2.4 GHz router. The Lumiac local Wi-Fi remains available.</p>
 <form id="network"><label>Wi-Fi name<input id="ssid" maxlength="32" required></label><label>Wi-Fi password<input id="password" type="password" maxlength="63" autocomplete="new-password"></label><button>Save and connect</button></form><p id="state" role="status"></p>
+<details><summary>Connection details</summary><pre id="diagnostics" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
 <p>Remote panel: <a href="https://lumiac.control.timiac.it">lumiac.control.timiac.it</a></p><a href="/">Back to dashboard</a>
-<script>const $=id=>document.getElementById(id);async function refresh(){try{const r=await fetch('/api/network',{cache:'no-store'}),s=await r.json();$('state').textContent=(s.wifi.connected?'Router connected. ':'Router disconnected. ')+(s.wifi.cloud||'')+(s.wifi.error?' - '+s.wifi.error:'');if(!$('ssid').value)$('ssid').value=s.wifi.ssid||'';}catch(e){$('state').textContent=e.message;}}$('network').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/api/network',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:$('ssid').value,password:$('password').value})}),s=await r.json();if(!r.ok)throw Error(s.error);$('password').value='';await refresh();}catch(e){$('state').textContent=e.message;}};refresh();setInterval(refresh,3000);</script></html>)HTML";
+<script>const $=id=>document.getElementById(id);async function refresh(){try{const r=await fetch('/api/network',{cache:'no-store'}),s=await r.json();$('state').textContent=(s.wifi.connected?'Router connected. ':'Router disconnected. ')+(s.wifi.cloud||'')+(s.wifi.error?' - '+s.wifi.error:'');$('diagnostics').textContent=[s.controller+' / '+s.software+' / '+s.sourceBranch,'IP: '+s.wifi.ip,'Gateway: '+s.wifi.gateway,'DNS: '+s.wifi.dns,'Signal: '+s.wifi.rssi+' dBm','UTC: '+(s.wifi.utcEpoch?new Date(s.wifi.utcEpoch*1000).toISOString():'not synchronized'),'Free RAM: '+s.reliability.freeHeap+' bytes','Largest block: '+(s.reliability.largestHeapBlock??'n/a'),'Last request: '+s.reliability.cloudRequestMs+' ms'].join('\n');if(!$('ssid').value)$('ssid').value=s.wifi.ssid||'';}catch(e){$('state').textContent=e.message;}}$('network').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/api/network',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:$('ssid').value,password:$('password').value})}),s=await r.json();if(!r.ok)throw Error(s.error);$('password').value='';await refresh();}catch(e){$('state').textContent=e.message;}};refresh();setInterval(refresh,3000);</script></html>)HTML";
   server.send_P(200, "text/html; charset=utf-8", page);
 }

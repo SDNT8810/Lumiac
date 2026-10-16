@@ -1,4 +1,5 @@
 #pragma once
+#include "cloud_connection.h"
 // Included inside the controller namespace. Only serialized messages cross the
 // boundary; this transport never reads or changes motion, UART, or OTA state.
 struct CloudExchange {
@@ -11,33 +12,34 @@ void performCloudExchange(CloudExchange& exchange) {
   const uint32_t started = millis();
 #if defined(ESP8266)
   BearSSL::WiFiClientSecure client;
-  client.setTrustAnchors(&cloudRoots); client.setSession(&cloudTlsSession);
-  client.setTimeout(1500);
 #else
   WiFiClientSecure client;
-  client.setCACert(kCloudRunRootCa); client.setHandshakeTimeout(3);
 #endif
   HTTPClient request;
-#if !defined(ESP8266)
-  request.setConnectTimeout(1500);
-#endif
-  request.setTimeout(1500); request.setReuse(false); request.useHTTP10(true);
+  configureCloudConnection(client, request);
   if (!request.begin(client, String(LUMIAC_CLOUD_URL) + "/device/v1/devices/" LUMIAC_CLOUD_DEVICE_ID "/sync")) {
     exchange.error = "Cannot open remote gateway";
   } else {
     request.addHeader("Content-Type", "application/json");
     request.addHeader("X-Lumiac-Device-Key", LUMIAC_CLOUD_DEVICE_KEY);
     request.addHeader("Accept-Encoding", "identity");
-    const int code = request.POST(exchange.payload);
+    // POST(String) copies the entire status packet while BearSSL holds its
+    // handshake buffers. Send the existing bytes to leave ESP-12S more free RAM.
+    const auto* payload = reinterpret_cast<const uint8_t*>(exchange.payload.c_str());
+    const int code = request.POST(const_cast<uint8_t*>(payload), exchange.payload.length());
     exchange.payload = "";
-    if (code != 200) exchange.error = "HTTPS status " + String(code);
+    if (code != 200) exchange.error = cloudConnectionError(client, code);
     else {
       // Bound allocation and read time, including responses without Content-Length.
       const int length = request.getSize();
       uint32_t progress = millis();
+      const uint32_t responseStarted = progress;
       auto* stream = request.getStreamPtr();
       if (length > 3072) exchange.error = "Gateway response is too large";
       while (exchange.error.isEmpty() && (length < 0 || int(exchange.response.length()) < length)) {
+        if (millis() - responseStarted > kCloudResponseLimitMs) {
+          exchange.error = "Gateway response timed out"; break;
+        }
         if (stream->available()) {
           if (exchange.response.length() >= 3072) { exchange.error = "Gateway response is too large"; break; }
           exchange.response += char(stream->read()); progress = millis();
@@ -46,7 +48,7 @@ void performCloudExchange(CloudExchange& exchange) {
             if (length >= 0 && int(exchange.response.length()) != length) exchange.error = "Gateway response interrupted";
             break;
           }
-          if (millis() - progress > 1500 || millis() - started > 15000) {
+          if (millis() - progress > kCloudResponseIdleMs) {
             exchange.error = "Gateway response timed out"; break;
           }
           delay(1);

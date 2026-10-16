@@ -7,6 +7,7 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <cstring>
 #include "host/freertos/queue.h"
 class String : public std::string {
 public:
@@ -58,7 +59,8 @@ struct Session {}; struct X509List {};
 struct WiFiClientSecure {
   WiFiClientSecure() { ++liveTls; } ~WiFiClientSecure() { --liveTls; }
   void setTrustAnchors(X509List*) {} void setSession(Session*) {}
-  void setTimeout(unsigned ms) { assert(ms == 1500); } void stop() {}
+  void setTimeout(unsigned ms) { assert(ms >= 15000); } void stop() {}
+  int getLastSSLError(char* text, size_t size) { std::strncpy(text, "certificate verification failed", size); return -1000; }
 };
 }
 BearSSL::Session cloudTlsSession;
@@ -68,20 +70,23 @@ using WiFiClientSecure = BearSSL::WiFiClientSecure;
 void networkYield() { std::this_thread::yield(); }
 struct WiFiClientSecure {
   WiFiClientSecure() { ++liveTls; } ~WiFiClientSecure() { --liveTls; }
-  void setCACert(const char*) {} void setHandshakeTimeout(unsigned seconds) { assert(seconds == 3); }
+  void setCACert(const char*) {} void setHandshakeTimeout(unsigned seconds) { assert(seconds >= 20); }
+  int lastError(char* text, size_t size) { std::strncpy(text, "certificate verification failed", size); return -1000; }
   void stop() {}
 };
 #endif
 void delay(unsigned) { networkYield(); }
 struct HTTPClient {
   size_t offset = 0;
-  void setConnectTimeout(unsigned ms) { assert(ms == 1500); }
-  void setTimeout(unsigned ms) { assert(ms == 1500); }
+  void setConnectTimeout(unsigned ms) { assert(ms >= 10000); }
+  void setTimeout(unsigned ms) { assert(ms >= 15000); }
+  static String errorToString(int) { return "connection failed"; }
   void setReuse(bool reuse) { assert(!reuse); } void useHTTP10(bool use) { assert(use); }
+  void setUserAgent(const char* agent) { assert(std::string(agent) == "Lumiac-Controller/1.0"); }
   bool begin(WiFiClientSecure&, const String&) { return true; }
   void addHeader(const char*, const char*) {}
-  int POST(const String& payload) {
-    assert(payload == "{\"status\":{}}"); started = true;
+  int POST(uint8_t* payload, size_t size) {
+    assert(std::string(reinterpret_cast<char*>(payload), size) == "{\"status\":{}}"); started = true;
     while (!released) networkYield();
     return code;
   }
@@ -128,7 +133,7 @@ int main() {
   assert(started); released = true;
   CloudExchange* reply = nullptr;
   for (unsigned n = 0; n < 100000 && !reply; ++n) { serviceCloudTransport(); reply = takeCloudExchange(); std::this_thread::yield(); }
-  assert(reply == exchange && reply->error == "HTTPS status 503" && !liveTls); delete reply;
+  assert(reply == exchange && reply->error == "Gateway HTTP 503" && !liveTls); delete reply;
   // Recover, and then reject a response that would otherwise allocate without limit.
   for (unsigned attempt = 0; attempt < 2; ++attempt) {
     code = 200; if (attempt) responseBody.assign(10000, 'x');
@@ -140,6 +145,16 @@ int main() {
     else assert(reply->error == "Gateway response is too large");
     delete reply;
   }
+  // Negative HTTP-client errors must retain the TLS reason, rather than claiming
+  // the gateway sent a negative HTTP status. No certificate bypass is permitted.
+  code = unsigned(-1);
+  exchange = new CloudExchange; exchange->payload = "{\"status\":{}}";
+  assert(submitCloudExchange(exchange)); reply = nullptr;
+  for (unsigned n = 0; n < 100000 && !reply; ++n) { serviceCloudTransport(); reply = takeCloudExchange(); std::this_thread::yield(); }
+  assert(reply == exchange && !liveTls);
+  assert(reply->error.find("Secure connection failed (-1)") != std::string::npos);
+  assert(reply->error.find("TLS -1000: certificate verification failed") != std::string::npos);
+  delete reply;
 #if !defined(ESP8266)
   { std::lock_guard<std::mutex> lock(cloudRequests->mutex); cloudRequests->closed = true; cloudRequests->ready.notify_all(); }
   cloudTask->join(); delete cloudTask; vQueueDelete(cloudRequests); vQueueDelete(cloudResponses);
