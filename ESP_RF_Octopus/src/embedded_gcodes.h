@@ -7,7 +7,7 @@ static const char kProgram0[] PROGMEM = R"LUMIAC_GCODE(; Smooth seamless struggl
 ; Axes: X Y Z A B C
 ; Range: 0..120 mm
 ; Original irregular path forward, then retraced backward; loop start and end match.
-; 1:3 gearbox note: coordinates stay arm-side; Marlin steps/unit is divided by 3.
+; Coordinates stay arm-side; configure gear ratio in Marlin/lumiac_gearing.h.
 
 G90
 ; Quiet random-motion profile: overrides M215's P15/T15 acceleration for this file.

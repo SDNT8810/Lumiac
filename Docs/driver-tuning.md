@@ -1,5 +1,10 @@
 # Driver cooling, torque, and noise
 
+On the `onetoone` branch, the configurable 1:1 drive uses approximately
+3200 steps/mm at 32 microsteps. The gearing and steps/mm values in the historical
+notes below describe the normal `RF` build. Follow [the gearing guide](onetoone.md)
+and install matching ESP and Octopus firmware when switching calibration.
+
 ## Octopus-only 30% motion reduction
 
 The current Octopus firmware applies **70% of the planned speed and acceleration** to every move, including random programs, POS, manual moves and homing. Updating the ESP32 is unnecessary. `LUMIAC_MOTION_PERCENT` in `Configuration.h` sets this factor; it is applied after the motion planner's axis limits, before the acceleration profile is calculated.

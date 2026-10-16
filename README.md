@@ -1,5 +1,10 @@
 # Lumiac
 
+This is the **`onetoone` branch**, configured for a **1:1 motor/output ratio**.
+Change the ratio in `Marlin/marlin-2.1.2.6/Marlin/lumiac_gearing.h` and follow
+[the 1:1 installation guide](Docs/onetoone.md). The normal gearbox build remains
+on `RF`; both branches include [the controller stability fix](Docs/reliability.md).
+
 **Remote control and firmware updates:** use **https://lumiac.control.timiac.it/**
 with the existing Andrea account. Both ESP32 and ESP-12S controller variants can
 update themselves and the Octopus over the internet after one initial USB/SD

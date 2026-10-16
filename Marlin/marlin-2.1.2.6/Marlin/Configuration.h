@@ -1223,7 +1223,7 @@
  */
 // One setting for all six TMC drivers AND their distance calibration.
 // Compare 2 / 8 / 16 / 32 / 64 / 128 / 256 only after resolving overheating. See Docs/driver-tuning.md.
-// Keep the measured 533.33 steps/mm at 16 microsteps as the reference.
+// Gear ratio and the reference distance calibration are in lumiac_gearing.h.
 #ifndef SPIDER_MICROSTEPS
   // Driver interpolation stays at 256; fewer external pulses reduce step-timing load.
   #define SPIDER_MICROSTEPS 32
@@ -1231,7 +1231,7 @@
 #if SPIDER_MICROSTEPS != 2 && SPIDER_MICROSTEPS != 8 && SPIDER_MICROSTEPS != 16 && SPIDER_MICROSTEPS != 32 && SPIDER_MICROSTEPS != 64 && SPIDER_MICROSTEPS != 128 && SPIDER_MICROSTEPS != 256
   #error "SPIDER_MICROSTEPS must be 2, 8, 16, 32, 64, 128, or 256."
 #endif
-#define SPIDER_AXIS_STEPS_PER_UNIT (533.33f * SPIDER_MICROSTEPS / 16.0f)
+#include "lumiac_gearing.h"
 #define DEFAULT_AXIS_STEPS_PER_UNIT { SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT, SPIDER_AXIS_STEPS_PER_UNIT }
 
 // Octopus-only motion reduction, applied once per planner block after the

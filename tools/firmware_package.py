@@ -15,7 +15,7 @@ def prepare():
     release = json.loads((ROOT / 'shared/release.json').read_text())
     contract = b'Lumiac cloud protocol 1\n' + b''.join(
         (MARLIN / 'Marlin' / name).read_bytes().replace(b'\r\n', b'\n')
-        for name in ('Configuration.h', 'Configuration_adv.h'))
+        for name in ('Configuration.h', 'Configuration_adv.h', 'lumiac_gearing.h'))
     identity = 'LUMIAC1-' + hashlib.sha256(contract).hexdigest()[:12]
     revision = release['revision']
     branch = release.get('branch', 'RF')
