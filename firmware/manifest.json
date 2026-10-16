@@ -1,23 +1,23 @@
 {
   "identity": "LUMIAC1-4464a27508d8",
-  "revision": "2026-10-16.1",
+  "revision": "2026-10-16.3",
   "branch": "RF",
   "images": {
     "esp12.bin": {
-      "size": 605104,
-      "sha256": "41f8bfd6ae75036b48cb6938c25e8c76cf3ab06aac7ba92a904183ecf67774bd"
+      "size": 611552,
+      "sha256": "a3efcf97f9e7418d502dc17594313a5b9e98caaac622bd4730881eb80c0b6719"
     },
     "esp32.bin": {
-      "size": 1554368,
-      "sha256": "015b1bf0741b6e6c1a237786add0ddcf204cd4f852ba8b5f7d98c86a95526272"
+      "size": 1557056,
+      "sha256": "afc29b28182cbc253816fab461651e82fe3767d37f1b8e3966e7a56a46dd656f"
     },
     "octopus.bin": {
       "size": 131436,
-      "sha256": "66aa056bf3a52b9a45141e50589da69045dea5261de095a93c0d7c1aecb5db83"
+      "sha256": "976813d2af6c5996d8398c73bdf88e3ea248025c07d6258a19dfb14758ec61bb"
     },
     "esp32_bootloader.bin": {
       "size": 25632,
-      "sha256": "67f11e4e27ef307bbcce9cda340ce88afe50309eaf73fb718a4661be1a28490c"
+      "sha256": "101876bccde46f39c2bfc38e5bdc580544d9e61886419304117995686015865d"
     },
     "esp32_partitions.bin": {
       "size": 3072,
