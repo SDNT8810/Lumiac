@@ -6,6 +6,10 @@ update themselves and the Octopus over the internet after one initial USB/SD
 installation. Use [the setup guide](Docs/remote-updates.md); prebuilt images and
 checksums are in `firmware/`. Leave the Octopus microSD installed.
 
+**Local hotspot updates:** after installing release 2026-10-19.1 on the ESP once,
+connect the PC to Lumiac Wi-Fi and run `python local_update.py --target all`.
+Cloud and USB/SD remain available. See [all three update methods](Docs/local-updates.md).
+
 Lumiac is the control stack for a six-axis hexapod/spider robot built around a BIGTREETECH Octopus v1.1 and an ESP-12S or ESP32 controller. It includes customized Marlin firmware, a Wi-Fi/RF bridge, motion programs embedded in ESP flash, a browser control panel, and a local motion simulator.
 
 > **Hardware warning:** This project controls high-current stepper drivers and moving machinery. Test with the robot raised or the motors disconnected, keep an emergency power cut-off within reach, and verify every pin and current limit before applying motor power.
