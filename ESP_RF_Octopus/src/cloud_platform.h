@@ -16,10 +16,12 @@ extern "C" {
 #include <WiFiClientSecure.h>
 #include <freertos/queue.h>
 #include <esp_system.h>
+#include <esp_ota_ops.h>
 #endif
 #include "cloud_config.h"
 #include "build_version.h"
 #include "../../shared/firmware_transfer.h"
+#include "../../shared/diagnostic_journal.h"
 #include "ota_writer.h"
 #include "cloud_certificate.h"
 

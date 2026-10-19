@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 
-async function dashboard(patch = {}, online = true, fullUpdate = null) {
+async function dashboard(patch = {}, online = true, fullUpdate = null, update = null) {
   const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   const dom = new JSDOM(html, { url: 'https://lumiac.control.timiac.it', runScripts: 'outside-only' });
   const requests = [], state = { controller: 'esp32', octopusOnline: true, homed: true,
@@ -13,7 +13,7 @@ async function dashboard(patch = {}, online = true, fullUpdate = null) {
   dom.window.fetch = async (path, options = {}) => {
     requests.push({path, options});
     if (path.endsWith('/config')) return Response.json({deviceId: 'lumiac-01'});
-    if (path.endsWith('/status')) return Response.json({online, queued: 0, status: state, fullUpdate});
+    if (path.endsWith('/status')) return Response.json({online, queued: 0, status: state, fullUpdate, update});
     if (path.endsWith('/firmware')) return Response.json({id: 'image-one'});
     return Response.json({id: 'request-one'});
   };
@@ -77,4 +77,16 @@ test('durable Full update status is restored after reopening the page', async ()
   assert.match(f.$('full-update-status').textContent, /Building all firmware/);
   assert.equal(f.$('full-update').disabled, true); assert.equal(f.$('feed').disabled, true);
   assert.equal(f.$('stop').disabled, false); f.dom.window.close();
+});
+test('a newer manual update archives the old failure and its exact terminal receipt wins', async () => {
+  const f = await dashboard({ota: {supported: true, id: 'manual', target: 'esp12', active: true, state: 'stopping'}}, true,
+    {state: 'failed', error: 'old connection failure', updated_at: 100},
+    {id: 'manual', target: 'esp12', state: 'complete', createdAt: 200});
+  assert.equal(f.$('full-update-history').hidden, false);
+  assert.match(f.$('full-update-history-status').textContent, /old connection failure/);
+  assert.equal(f.$('full-update-status').classList.contains('error'), false);
+  assert.match(f.$('firmware-status').textContent, /esp12.*complete/);
+  assert.equal(f.$('firmware-status').classList.contains('error'), false);
+  assert.match(f.$('diagnostic-download').href, /lumiac-01\/diagnostics$/);
+  f.dom.window.close();
 });

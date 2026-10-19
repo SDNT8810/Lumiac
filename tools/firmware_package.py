@@ -65,6 +65,8 @@ def export():
         role = name.removesuffix('.bin')
         if not 1024 <= len(data) <= limits[name] or identity.encode() not in data or revision.encode() not in data or ('LUMIAC_OTA_ROLE:' + role).encode() not in data:
             raise ValueError(f'Rebuild the matching {role} image before exporting')
+        if role in ('esp12', 'esp32') and b'LUMIAC_LOCAL_OTA_V1' not in data:
+            raise ValueError(f'Rebuild {role} with hotspot update recovery before exporting')
         shutil.copy2(path, OUTPUT / name)
         manifest['images'][name] = {'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
     build = ESP / '.pio/build/esp32dev'

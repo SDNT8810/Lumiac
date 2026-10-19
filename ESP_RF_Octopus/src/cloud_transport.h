@@ -5,10 +5,14 @@
 struct CloudExchange {
   String payload, response, error;
   uint32_t elapsed = 0;
+  // Reuse the same serialized worker/continuation for OTA headers. The main
+  // loop keeps servicing the hotspot and UART during DNS/TCP/TLS handshakes.
+  void (*operation)(CloudExchange&) = nullptr;
 };
 bool cloudInFlight = false;
 
 void performCloudExchange(CloudExchange& exchange) {
+  if (exchange.operation) { exchange.operation(exchange); return; }
   const uint32_t started = millis();
 #if defined(ESP8266)
   BearSSL::WiFiClientSecure client;

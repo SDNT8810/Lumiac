@@ -8,7 +8,7 @@ const timiac = import.meta.url.toLowerCase().includes('/timiac/');
 const family = timiac ? 'TIMIAC' : 'LUMIAC', prefix = timiac ? 'Timiac' : 'Lumiac';
 const sha = 'a'.repeat(40), machine = timiac ? 'TIMIAC2-123456789abc' : 'LUMIAC1-123456789abc';
 const components = timiac ? [['esp1','app'],['esp2','app'],['octopus1','octopus'],['octopus2','octopus'],['master','app'],['master','filesystem']]
-  : [['octopus','octopus'],['esp12','app'],['esp32','app']];
+  : [['esp12','app'],['esp32','app'],['octopus','octopus']];
 function fixture(t, controller = 'esp32') {
   const db = new DatabaseSync(':memory:');
   db.exec(readFileSync(new URL('../cloudflare/schema.sql', import.meta.url), 'utf8'));

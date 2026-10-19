@@ -155,6 +155,25 @@ int main() {
   assert(reply->error.find("Secure connection failed (-1)") != std::string::npos);
   assert(reply->error.find("TLS -1000: certificate verification failed") != std::string::npos);
   delete reply;
+  // OTA header handshakes use the same worker; a stalled firmware source
+  // must still leave the real UART loop available on both ESP families.
+  started = released = false;
+  exchange = new CloudExchange;
+  exchange->operation = [](CloudExchange& job) {
+    started = true; while (!released) networkYield(); job.error = "firmware source timeout";
+  };
+  assert(submitCloudExchange(exchange));
+  for (unsigned tick = 0; tick < 1000; ++tick) {
+    serviceCloudTransport(); assert(!takeCloudExchange());
+    octopusSerial.feed("OTA_IDLE_ACK\n"); readOctopusSerial();
+    assert(lastSerialLine == "OTA_IDLE_ACK");
+#if defined(ESP8266)
+    assert(g_pcont == &mainContext);
+#endif
+  }
+  released = true; reply = nullptr;
+  for (unsigned n = 0; n < 100000 && !reply; ++n) { serviceCloudTransport(); reply = takeCloudExchange(); std::this_thread::yield(); }
+  assert(reply == exchange && reply->error == "firmware source timeout" && !liveTls); delete reply;
 #if !defined(ESP8266)
   { std::lock_guard<std::mutex> lock(cloudRequests->mutex); cloudRequests->closed = true; cloudRequests->ready.notify_all(); }
   cloudTask->join(); delete cloudTask; vQueueDelete(cloudRequests); vQueueDelete(cloudResponses);

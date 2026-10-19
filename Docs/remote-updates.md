@@ -123,13 +123,13 @@ over-the-air installation still needs the first on-hardware commissioning test.
 
 Open the remote dashboard, sign in, and press **Full update** under Firmware updates. No firmware files need to be selected.
 
-1. The server requests a fresh GitHub Actions build of the latest pushed commit (RF).
+1. The server requests a fresh GitHub Actions build of the latest pushed commit of the installed calibration branch (RF or onetoone).
 2. Every firmware is built and checked before any board is updated.
 3. The server installs the complete package in sequence, waiting for each board's verified success and reboot before continuing. Progress survives closing the browser.
 4. If any build or installation fails, the sequence stops. Check the message/build log before trying again. Keep power connected throughout installation. **Stop** cancels the remaining sequence; a flash already activating must finish safely.
 5. After success, calibrate/home the arms and resume operation from the dashboard.
 
-Lumiac builds the Octopus, ESP32, and ESP-12S firmware. It installs the Octopus first, then whichever ESP controller is connected. ESP32 and ESP-12S are alternatives: an absent controller cannot be flashed.
+Lumiac builds the Octopus, ESP32, and ESP-12S firmware. It installs the connected ESP controller first, then the Octopus. ESP32 and ESP-12S are alternatives: an absent controller cannot be flashed.
 
 The initial USB/SD setup is still required once. Leave all Octopus microSD cards inserted and connect the controller to Internet Wi-Fi. Push your code before using Full update: uncommitted changes on a PC are not included.
 
@@ -146,3 +146,5 @@ For a build-only smoke test, an authenticated administrator can POST `{"validate
 The firmware's paired cloud configuration is committed with the source. `CloudGateway/project-secrets.json` also contains the project device key, Firebase API key, and full-build upload key, as requested. A normal pull includes these files; no credential copy/paste is needed to flash firmware or use the existing Full update service.
 
 To reapply the project secrets to the existing Cloudflare Worker after signing into Wrangler, run `npm run configure:secrets --prefix CloudGateway`. This preserves its separately configured GitHub build account token. Repository/account authorization itself uses your normal GitHub and Cloudflare sign-in.
+
+Local hotspot updates are also available without internet. See [local, cloud and USB updates](local-updates.md).

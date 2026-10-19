@@ -30,7 +30,7 @@ class CloudFirmwareTests(unittest.TestCase):
 
     def test_production_receivers_reject_corruption_and_preserve_activation_guards(self):
         with tempfile.TemporaryDirectory(prefix='lumiac-update-test-') as folder:
-            for source, flags in [('firmware_update_test', []), ('ota_writer_test', ['-DARDUINO_ARCH_ESP8266=1']),
+            for source, flags in [('firmware_image_test', []), ('diagnostic_journal_test', []), ('diagnostic_journal_test', ['-DARDUINO_ARCH_ESP8266=1']), ('firmware_update_test', []), ('ota_writer_test', ['-DARDUINO_ARCH_ESP8266=1']),
                                   ('ota_writer_test', ['-DARDUINO_ARCH_ESP32=1'])]:
                 executable = Path(folder) / 'receiver.exe'
                 subprocess.run([sys.executable, '-m', 'ziglang', 'c++', '-std=c++11', '-O1', '-UNDEBUG',
