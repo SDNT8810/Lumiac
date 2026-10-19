@@ -190,3 +190,41 @@ test('firmware completion is matched by job ID and SHA-256 and never replays a f
   assert.equal(status.update.state, 'complete'); assert.equal(status.queued, 0);
   assert.equal((await (await f.sync()).json()).update, undefined);
 });
+test('only matching byte/phase progress renews an update lease; stalled progress expires', async t => {
+  const f = fixture(t);
+  Object.assign(f.state, {controller: 'esp32', firmware: 'LUMIAC1-123456789abc', ota: {supported: true}});
+  await f.sync(); const stored = await (await upload(f, 'esp32')).json();
+  const job = await (await f.call('/api/devices/clock-01/updates', {imageId: stored.id}, f.admin)).json();
+  await f.sync();
+  Object.assign(f.state.ota, {id: job.id, sha256: stored.sha256, active: true, state: 'downloading', done: 10});
+  await f.sync();
+  const lease = () => f.sql.prepare('SELECT expires_at FROM ota_jobs WHERE id=?').get(job.id).expires_at;
+  const first = lease(); f.advance(120000); await f.sync(); assert.equal(lease(), first);
+  f.state.ota.done = 20; await f.sync(); const second = lease(); assert.ok(second > first);
+  f.advance(120000); f.state.ota.sha256 = '0'.repeat(64); f.state.ota.done = 30;
+  await f.sync(); assert.equal(lease(), second);
+  f.advance(60001); await f.sync();
+  assert.equal(f.sql.prepare('SELECT state FROM ota_jobs WHERE id=?').get(job.id).state, 'expired');
+});
+test('an unconfirmed controller reboot expires the old update and never resubmits it', async t => {
+  const f = fixture(t);
+  Object.assign(f.state, {controller: 'esp12', firmware: 'LUMIAC1-123456789abc', ota: {supported: true}});
+  await f.sync(); const stored = await (await upload(f, 'esp12')).json();
+  const job = await (await f.call('/api/devices/clock-01/updates', {imageId: stored.id}, f.admin)).json();
+  await f.sync(); f.state.session = 'rebooted';
+  assert.equal((await (await f.sync()).json()).update, undefined);
+  const result = f.sql.prepare('SELECT state,error FROM ota_jobs WHERE id=?').get(job.id);
+  assert.equal(result.state, 'expired'); assert.match(result.error, /Controller restarted/);
+});
+test('saved diagnostics are deduplicated and remain available offline after reboot', async t => {
+  const f = fixture(t);
+  assert.equal((await f.call('/api/devices/clock-01/diagnostics')).status, 401);
+  f.state.diagnostics = [{id: 'p1', boot: 'previous-boot', at: 300, utc: 1792248000, text: 'OTA esp12 verifying', persistent: true}];
+  await f.sync(); await f.sync(); f.state.session = 'new-boot'; await f.sync(); f.advance(60000);
+  const response = await f.call('/api/devices/clock-01/diagnostics', undefined, f.admin);
+  assert.equal(response.status, 200); assert.match(response.headers.get('Content-Disposition'), /attachment/);
+  const saved = await response.json(); assert.equal(saved.lastKnownStatus.session, 'new-boot');
+  const events = saved.events.filter(event => event.message === 'OTA esp12 verifying');
+  assert.equal(events.length, 1); assert.equal(events[0].persistent, 1);
+  assert.equal((await (await f.call('/api/devices/clock-01/status', undefined, f.admin)).json()).online, false);
+});

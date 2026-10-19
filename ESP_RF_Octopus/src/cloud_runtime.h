@@ -7,6 +7,9 @@ struct RemoteUpdate {
 String cloudBoot, cloudSsid, cloudPassword, cloudState = "not configured", cloudError;
 String lastCloudActionId, lastCloudActionType, lastCloudActionError;
 bool cloudStorageReady = false, pendingUpdateBoot = false;
+String localFirmwareNonce, localFirmwareUrl;
+String otaDeferredError;
+bool otaOpenInFlight = false;
 uint32_t lastCloudPoll = 0, lastWifiAttempt = 0, updateSince = 0, updateProgress = 0, updateRebootAt = 0;
 String updateIdleMarker;
 bool updateIdleConfirmed = false;
@@ -24,12 +27,14 @@ BearSSL::X509List cloudRoots(kCloudRunRootCa);
 WiFiClientSecure cloudTls;
 #endif
 HTTPClient cloudHttp;
+WiFiClient localFirmwareClientSocket;
 #include "cloud_transport.h"
 bool cloudTransportReady = false;
 uint32_t cloudPollInterval = 5000, cloudFailures = 0, cloudLastElapsed = 0;
 String lastControlFault, controllerResetReason;
 uint32_t controlFaultCount = 0, controlFaultAt = 0;
 bool cloudTransportBusy() { return cloudInFlight; }
+#include "persistent_diagnostics.h"
 
 bool saveCloudSettings() {
   if (!cloudStorageReady) return false;
@@ -65,6 +70,7 @@ void clearFirmwarePark() {
 void recordControlFault(const String& reason) {
   lastControlFault = reason; controlFaultAt = millis(); ++controlFaultCount;
   saveCloudSettings();
+  persistDiagnostic("Control fault: " + reason);
 }
 void writeRemoteState(JsonDocument& doc) {
   doc["session"] = cloudBoot; doc["controller"] = kControllerRole;
@@ -81,6 +87,7 @@ void writeRemoteState(JsonDocument& doc) {
 #endif
   reliability["cloudBusy"] = cloudInFlight; reliability["cloudFailures"] = cloudFailures;
   reliability["cloudRequestMs"] = cloudLastElapsed;
+  reliability["diagnosticWriteFailures"] = diagnosticWriteFailures;
   JsonObject wifi = doc["wifi"].to<JsonObject>();
   wifi["ssid"] = cloudSsid; wifi["connected"] = WiFi.status() == WL_CONNECTED;
   wifi["ip"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String();
@@ -89,6 +96,7 @@ void writeRemoteState(JsonDocument& doc) {
   wifi["cloud"] = cloudState; wifi["error"] = cloudError;
   JsonObject ota = doc["ota"].to<JsonObject>();
   ota["supported"] = cloudStorageReady; ota["sdSupported"] = octopusSdOta;
+  ota["localSupported"] = true; ota["localMarker"] = "LUMIAC_LOCAL_OTA_V1";
   ota["active"] = firmwareUpdating; ota["parked"] = firmwareParked;
   ota["marker"] = kOtaImageMarker; ota["id"] = remoteUpdate.id;
   ota["target"] = remoteUpdate.target; ota["kind"] = remoteUpdate.kind;
@@ -98,7 +106,7 @@ void writeRemoteState(JsonDocument& doc) {
   JsonObject action = doc["remoteAction"].to<JsonObject>();
   action["id"] = lastCloudActionId; action["type"] = lastCloudActionType; action["error"] = lastCloudActionError;
 }
-void closeCloudHttp() { cloudHttp.end(); cloudTls.stop(); }
+void closeCloudHttp() { cloudHttp.end(); cloudTls.stop(); localFirmwareClientSocket.stop(); }
 bool openCloudHttp(const String& path) {
   closeCloudHttp();
   configureCloudConnection(cloudTls, cloudHttp);
@@ -109,21 +117,26 @@ bool openCloudHttp(const String& path) {
   return true;
 }
 void failRemoteUpdate(const String& error) {
+  // The serialized worker still owns HTTP/TLS until its completion mailbox.
+  // A late UART error must not close that connection from the hardware loop.
+  if (otaOpenInFlight) { otaDeferredError = error; firmwareUpdateCancel = true; return; }
   cloudWriter.abort(); octopusUpdateFile.close(); closeCloudHttp();
   if (remoteUpdate.kind == "octopus" && sdPhase < 5) octopusSerial.println("M997 P4");
   remoteUpdate.state = "failed"; remoteUpdate.phase = ""; remoteUpdate.error = error;
   firmwareUpdating = false; firmwareUpdateCancel = false; pendingUpdateBoot = false;
   saveCloudSettings(); lastCloudPoll = 0;
+  saveUpdateCheckpoint(true);
   logMessage(kBoardName, "Firmware update failed: " + error);
 }
 void completeRemoteUpdate() {
   octopusUpdateFile.close(); LUMIAC_FS.remove("/octopus.update");
   remoteUpdate.state = "complete"; remoteUpdate.phase = "";
   remoteUpdate.done = remoteUpdate.size; firmwareUpdating = false;
+  saveUpdateCheckpoint(true);
   lastCloudPoll = 0; logMessage(kBoardName, "Firmware update complete; motion remains parked.");
 }
 bool handleFirmwareLine(const String& raw) {
-  String line = raw; line.trim(); if (line.startsWith("echo:")) line.remove(0, 5);
+  String line = raw; line.trim(); if (line.startsWith("echo:")) { line.remove(0, 5); line.trim(); }
   if (line == "Cap:LUMIAC_SD_OTA:1") octopusSdOta = true;
   if (line.startsWith("LUMIAC_FW_VERSION:")) octopusCloudRevision = line.substring(strlen("LUMIAC_FW_VERSION:"));
   if (line.startsWith("LUMIAC_MACHINE:")) octopusCloudIdentity = line.substring(strlen("LUMIAC_MACHINE:"));
@@ -137,10 +150,11 @@ bool handleFirmwareLine(const String& raw) {
 void startRemoteUpdate(JsonVariantConst job) {
   if (firmwareUpdating || job["session"].as<String>() != cloudBoot) return;
   const String target = job["target"] | "", kind = job["kind"] | "", hash = job["sha256"] | "";
-  if (!otaHashValid(hash) || job["machine"].as<String>() != LUMIAC_FIRMWARE_ID ||
+  if (!cloudStorageReady || !octopusOnline || !octopusFirmwareReady || !otaHashValid(hash) || job["machine"].as<String>() != LUMIAC_FIRMWARE_ID ||
       (target != kControllerRole && target != "octopus") ||
       (target == "octopus" ? kind != "octopus" || !octopusSdOta : kind != "app")) return;
   remoteUpdate = RemoteUpdate();
+  localFirmwareUrl = ""; otaDeferredError = ""; pendingUpdateBoot = false; updateRebootAt = 0;
   remoteUpdate.id = job["id"].as<String>(); remoteUpdate.imageId = job["imageId"].as<String>();
   remoteUpdate.target = target; remoteUpdate.kind = kind; remoteUpdate.sha256 = hash;
   remoteUpdate.revision = job["revision"].as<String>(); remoteUpdate.size = job["size"] | 0U; remoteUpdate.crc32 = job["crc32"] | 0U;
@@ -150,29 +164,38 @@ void startRemoteUpdate(JsonVariantConst job) {
   firmwareUpdating = true; firmwareUpdateCancel = false; updateIdleConfirmed = false;
   remoteUpdate.state = "stopping"; remoteUpdate.phase = "waiting for Octopus to stop";
   updateSince = millis(); sdPhase = 0; sdWaiting = false;
+  saveUpdateCheckpoint(true);
   updateIdleMarker = "LUMIAC_OTA_IDLE_" + remoteUpdate.id;
   octopusSerial.println(";F001"); // Preserve idle cooling while drivers hold.
   octopusSerial.println("M400"); octopusSerial.println("M118 " + updateIdleMarker);
 }
-bool startFirmwareDownload() {
-  if (cloudInFlight) return false; // Wait until the sync worker has released TLS.
-  if (remoteUpdate.kind == "app") {
-    pendingUpdateBoot = true;
-    if (!saveCloudSettings()) { failRemoteUpdate("Cannot save the reboot receipt"); return false; }
-  }
-  if (!openCloudHttp("/device/v1/devices/" LUMIAC_CLOUD_DEVICE_ID "/firmware/" + remoteUpdate.imageId)) {
-    failRemoteUpdate("Cannot open the firmware gateway"); return false;
-  }
+void performFirmwareOpen(CloudExchange& exchange) {
+  const uint32_t started = millis();
+  bool opened;
+  if (!exchange.payload.isEmpty()) {
+    closeCloudHttp(); cloudHttp.setTimeout(8000); cloudHttp.setReuse(false); cloudHttp.useHTTP10(true);
+#if defined(ESP32)
+    cloudHttp.setConnectTimeout(8000);
+#endif
+    // LAN HTTP carries image bytes only; never send the cloud device key to a PC.
+    opened = cloudHttp.begin(localFirmwareClientSocket, exchange.payload);
+  } else opened = openCloudHttp("/device/v1/devices/" LUMIAC_CLOUD_DEVICE_ID "/firmware/" + remoteUpdate.imageId);
+  if (!opened) { exchange.error = "Cannot open the firmware source"; return; }
   const int code = cloudHttp.GET();
-  if (code != 200) { failRemoteUpdate(cloudConnectionError(cloudTls, code)); return false; }
-  if (cloudHttp.getSize() != int(remoteUpdate.size)) {
-    failRemoteUpdate("Firmware download length mismatch"); return false;
-  }
-  if (!cloudWriter.begin(remoteUpdate.kind, remoteUpdate.size, remoteUpdate.sha256)) {
-    failRemoteUpdate(cloudWriter.error); return false;
-  }
-  remoteUpdate.state = "downloading"; remoteUpdate.phase = "downloading and checking SHA-256";
-  updateProgress = millis(); return true;
+  if (code != 200) exchange.error = exchange.payload.isEmpty() ? cloudConnectionError(cloudTls, code) : "Local firmware HTTP " + String(code);
+  else if (cloudHttp.getSize() != int(remoteUpdate.size)) exchange.error = "Firmware download length mismatch";
+  exchange.elapsed = millis() - started;
+}
+bool startFirmwareDownload() {
+  if (cloudInFlight) return false;
+  if (!cloudTransportReady) { failRemoteUpdate("Network worker unavailable"); return false; }
+  CloudExchange* exchange = new (std::nothrow) CloudExchange;
+  if (!exchange) { failRemoteUpdate("Insufficient memory to start the download"); return false; }
+  exchange->operation = performFirmwareOpen; exchange->payload = localFirmwareUrl;
+  if (!submitCloudExchange(exchange)) { delete exchange; return false; }
+  cloudInFlight = otaOpenInFlight = true;
+  remoteUpdate.state = "opening"; remoteUpdate.phase = "connecting to firmware source";
+  return true;
 }
 void sdCommand(const String& line, const String& reply, uint32_t offset = 0) {
   sdLastCommand = line; sdExpectedReply = reply; sdExpectedOffset = offset;
@@ -182,7 +205,7 @@ void tickOctopusUpdate() {
   if (sdPhase == 5) {
     if (octopusFirmwareReady && octopusSdOta && octopusCloudRevision == remoteUpdate.revision && octopusCloudIdentity == LUMIAC_FIRMWARE_ID)
       completeRemoteUpdate();
-    else if (millis() - updateSince > 90000) failRemoteUpdate("Octopus reboot was not confirmed; check its SD card");
+    else if (millis() - updateSince > 120000) failRemoteUpdate("Octopus reboot was not confirmed; check its SD card");
     else if (millis() - sdSentAt > 2500) { sdSentAt = millis(); octopusSerial.println("M115"); }
     return;
   }
@@ -219,7 +242,7 @@ void tickRemoteUpdate() {
   if (updateRebootAt && int32_t(millis() - updateRebootAt) >= 0) { ESP.restart(); return; }
   if (!firmwareUpdating) return;
   if (firmwareUpdateCancel) {
-    if (sdPhase == 5 || updateRebootAt) return;
+    if (sdPhase == 5 || updateRebootAt || otaOpenInFlight) return;
     failRemoteUpdate("Update cancelled before activation"); return;
   }
   if (remoteUpdate.state == "stopping") {
@@ -241,6 +264,13 @@ void tickRemoteUpdate() {
   remoteUpdate.done += count; updateProgress = millis();
   if (remoteUpdate.done != remoteUpdate.size) return;
   closeCloudHttp();
+  remoteUpdate.state = "verifying"; remoteUpdate.phase = "checking complete image";
+  saveUpdateCheckpoint(true);
+  if (!cloudWriter.verified()) { failRemoteUpdate(cloudWriter.error); return; }
+  if (remoteUpdate.kind == "app") {
+    pendingUpdateBoot = true;
+    if (!saveUpdateCheckpoint(true) || !saveCloudSettings()) { failRemoteUpdate("Cannot save the reboot receipt"); return; }
+  }
   if (!cloudWriter.finish()) { failRemoteUpdate(cloudWriter.error); return; }
   if (remoteUpdate.kind == "app") {
     remoteUpdate.state = "rebooting"; remoteUpdate.phase = "rebooting the ESP controller";
@@ -273,19 +303,31 @@ void executeCloudAction(JsonVariantConst action) {
   }
   if (!handleAction(type, action, "Remote dashboard")) lastCloudActionError = "Action rejected by the controller";
 }
+#include "ota_local_api.h"
 void tickCloud() {
   const uint32_t now = millis();
   serviceCloudTransport();
   if (CloudExchange* reply = takeCloudExchange()) {
     cloudInFlight = false; cloudLastElapsed = reply->elapsed;
+    if (reply->operation) {
+      otaOpenInFlight = false;
+      if (!otaDeferredError.isEmpty()) failRemoteUpdate(otaDeferredError);
+      else if (!reply->error.isEmpty()) failRemoteUpdate(reply->error);
+      else if (firmwareUpdateCancel) failRemoteUpdate("Update cancelled before activation");
+      else if (!cloudWriter.begin(remoteUpdate.kind, remoteUpdate.size, remoteUpdate.sha256, remoteUpdate.target.c_str(), remoteUpdate.revision.c_str())) failRemoteUpdate(cloudWriter.error);
+      else { remoteUpdate.state = "downloading"; remoteUpdate.phase = "downloading and checking SHA-256"; updateProgress = millis(); }
+      delete reply; return;
+    }
     JsonDocument packet;
     if (reply->error.isEmpty() && deserializeJson(packet, reply->response, DeserializationOption::NestingLimit(8)))
       reply->error = "Invalid gateway response";
     if (reply->error.isEmpty()) {
+      if (cloudState != "connected") persistDiagnostic("Cloud connection established");
       cloudState = "connected"; cloudError = ""; cloudPollInterval = 5000;
       if (!packet["action"].isNull()) executeCloudAction(packet["action"]);
       if (!packet["update"].isNull()) startRemoteUpdate(packet["update"]);
     } else {
+      if (cloudError != reply->error) persistDiagnostic("Cloud connection failed: " + reply->error);
       cloudState = "gateway unavailable"; cloudError = reply->error; ++cloudFailures;
       cloudPollInterval = min(uint32_t(60000), cloudPollInterval * 2);
     }
@@ -294,13 +336,15 @@ void tickCloud() {
   if (cloudSsid.isEmpty()) return;
   if (cloudInFlight) return;
   if (WiFi.status() != WL_CONNECTED) {
+    // Router scans can change the AP channel. Preserve the local OTA connection.
+    if (firmwareUpdating) return;
     cloudState = "connecting to Wi-Fi";
     if (now - lastWifiAttempt > 20000) { lastWifiAttempt = now; WiFi.begin(cloudSsid.c_str(), cloudPassword.c_str()); }
     return;
   }
   if (time(nullptr) < 1700000000) { cloudState = "waiting for internet time"; return; }
   // OTA owns HTTPS exclusively while downloading, and only runs with motion parked.
-  if (remoteUpdate.state == "downloading" || updateRebootAt || (lastCloudPoll && now - lastCloudPoll < cloudPollInterval)) return;
+  if (remoteUpdate.state == "opening" || remoteUpdate.state == "downloading" || updateRebootAt || (lastCloudPoll && now - lastCloudPoll < cloudPollInterval)) return;
   lastCloudPoll = now;
   if (!cloudTransportReady) { cloudError = "Cloud worker unavailable"; return; }
 #if defined(ESP8266)
@@ -311,6 +355,7 @@ void tickCloud() {
     cloudError = "Cloud sync deferred: low free memory"; return;
   }
   JsonDocument packet; fillStateDocument(packet);
+  writeDiagnosticBatch(packet["diagnostics"].to<JsonArray>());
   CloudExchange* exchange = new (std::nothrow) CloudExchange;
   if (!exchange) { cloudError = "Cloud sync deferred: low free memory"; return; }
   exchange->payload = "{\"status\":"; serializeJson(packet, exchange->payload); exchange->payload += '}';
@@ -326,12 +371,15 @@ void beginCloud() {
   controllerResetReason = String(unsigned(esp_reset_reason()));
 #endif
   cloudBoot = WiFi.macAddress() + "-" + String(micros(), HEX) + "-" + String(random(0x7fffffff), HEX);
+  localFirmwareNonce = cloudBoot + "-" + String(random(0x7fffffff), HEX);
 #if defined(ESP8266)
   cloudStorageReady = LUMIAC_FS.begin();
 #else
   cloudStorageReady = LUMIAC_FS.begin(true);
 #endif
   if (cloudStorageReady) {
+    FsDiagnosticStore diagnostics; diagnosticJournal.load(diagnostics);
+    persistDiagnostic("Controller boot " + String(kControllerRole) + " " LUMIAC_FIRMWARE_REVISION + "; " + controllerResetReason);
     File file = LUMIAC_FS.open("/remote.json", "r");
     if (!file) file = LUMIAC_FS.open("/remote.backup", "r");
     if (file) {
@@ -350,7 +398,7 @@ void beginCloud() {
       }
       file.close();
     }
-    saveCloudSettings();
+    loadUpdateCheckpoint(); saveCloudSettings();
   }
   if (firmwareParked) cancelStartupAutomation(kBoardName, "firmware-update parked state");
   configTime(0, 0, "time.cloudflare.com", "pool.ntp.org");
@@ -377,6 +425,7 @@ void handleNetworkPage() {
 <h1>Lumiac remote access</h1><p>Connect this controller to a 2.4 GHz router. The Lumiac local Wi-Fi remains available.</p>
 <form id="network"><label>Wi-Fi name<input id="ssid" maxlength="32" required></label><label>Wi-Fi password<input id="password" type="password" maxlength="63" autocomplete="new-password"></label><button>Save and connect</button></form><p id="state" role="status"></p>
 <details><summary>Connection details</summary><pre id="diagnostics" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
+<p>Local firmware updates: connect the PC to Lumiac Wi-Fi, then run <code>python local_update.py --target all</code> from the project folder. <a href="/api/diagnostics">Download diagnostic log</a>.</p>
 <p>Remote panel: <a href="https://lumiac.control.timiac.it">lumiac.control.timiac.it</a></p><a href="/">Back to dashboard</a>
 <script>const $=id=>document.getElementById(id);async function refresh(){try{const r=await fetch('/api/network',{cache:'no-store'}),s=await r.json();$('state').textContent=(s.wifi.connected?'Router connected. ':'Router disconnected. ')+(s.wifi.cloud||'')+(s.wifi.error?' - '+s.wifi.error:'');$('diagnostics').textContent=[s.controller+' / '+s.software+' / '+s.sourceBranch,'IP: '+s.wifi.ip,'Gateway: '+s.wifi.gateway,'DNS: '+s.wifi.dns,'Signal: '+s.wifi.rssi+' dBm','UTC: '+(s.wifi.utcEpoch?new Date(s.wifi.utcEpoch*1000).toISOString():'not synchronized'),'Free RAM: '+s.reliability.freeHeap+' bytes','Largest block: '+(s.reliability.largestHeapBlock??'n/a'),'Last request: '+s.reliability.cloudRequestMs+' ms'].join('\n');if(!$('ssid').value)$('ssid').value=s.wifi.ssid||'';}catch(e){$('state').textContent=e.message;}}$('network').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/api/network',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:$('ssid').value,password:$('password').value})}),s=await r.json();if(!r.ok)throw Error(s.error);$('password').value='';await refresh();}catch(e){$('state').textContent=e.message;}};refresh();setInterval(refresh,3000);</script></html>)HTML";
   server.send_P(200, "text/html; charset=utf-8", page);

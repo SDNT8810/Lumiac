@@ -39,6 +39,9 @@ bool cloudTransportBusy();
 void handleNetworkPage();
 void handleNetworkSave();
 void handleNetworkState();
+void handleLocalFirmwareInfo();
+void handleLocalFirmwareStart();
+void handleDiagnostics();
 constexpr const char* kBoardName = board::kName;
 constexpr char kRemoteBoardName[] = "RF Remote";
 
@@ -2053,6 +2056,9 @@ void handleWsEvent(const uint8_t clientNum, const WStype_t type, uint8_t* payloa
 }
 
 void setupHttp() {
+  server.on("/api/firmware/local", HTTP_GET, handleLocalFirmwareInfo);
+  server.on("/api/firmware/local", HTTP_POST, handleLocalFirmwareStart);
+  server.on("/api/diagnostics", HTTP_GET, handleDiagnostics);
   server.on("/network", HTTP_GET, handleNetworkPage);
   server.on("/api/network", HTTP_GET, handleNetworkState);
   server.on("/api/network", HTTP_POST, handleNetworkSave);
@@ -2171,7 +2177,7 @@ void loop() {
   if (firmwareUpdating) {
     dnsServer.processNextRequest(); server.handleClient(); webSocket.loop();
     pollRfButtons(); bluetooth_remote::poll(handleBluetoothEvent, broadcastBluetoothKeys);
-    tickRemoteUpdate(); tickCloud(); yield(); return;
+    tickRemoteUpdate(); tickCloud(); saveUpdateCheckpoint(); yield(); return;
   }
   pollOctopusCapabilities();
   bluetooth_remote::poll(handleBluetoothEvent, broadcastBluetoothKeys);

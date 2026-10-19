@@ -9,8 +9,8 @@ const family = env => env.TIMIAC_DEVICE_ID ? 'TIMIAC' : 'LUMIAC';
 const device = env => env[family(env) + '_DEVICE_ID'];
 const origin = env => env[family(env) + '_PUBLIC_ORIGIN'];
 const order = env => family(env) === 'TIMIAC'
-  ? [['esp1', 'app'], ['esp2', 'app'], ['octopus1', 'octopus'], ['octopus2', 'octopus'], ['master', 'app'], ['master', 'filesystem']]
-  : [['octopus', 'octopus'], ['esp12', 'app'], ['esp32', 'app']];
+  ? [['master', 'app'], ['esp1', 'app'], ['esp2', 'app'], ['octopus1', 'octopus'], ['octopus2', 'octopus'], ['master', 'filesystem']]
+  : [['esp12', 'app'], ['esp32', 'app'], ['octopus', 'octopus']];
 export const fullUpdateActive = update => ['building', 'installing'].includes(update?.state);
 
 export async function cancelFullUpdate(env, now) {
@@ -18,11 +18,17 @@ export async function cancelFullUpdate(env, now) {
   await env.DB.prepare("UPDATE ota_jobs SET state='cancelled' WHERE state='queued' AND id IN (SELECT job_id FROM full_update_steps s JOIN full_updates f ON f.id=s.full_id WHERE f.state='cancelled')").run();
 }
 export async function fullUpdateState(env, now) {
+  await env.DB.prepare("UPDATE ota_jobs SET state='expired',error='Firmware update stopped making progress; check the board connection before retrying' WHERE state IN ('queued','delivered') AND expires_at<=?").bind(now).run();
   await env.DB.prepare(`UPDATE full_updates SET state='failed', error='Full update timed out; check the build log and connection before trying again', updated_at=? WHERE ${active} AND expires_at<=?`).bind(now, now).run();
   await env.DB.prepare("UPDATE ota_jobs SET state='cancelled' WHERE state='queued' AND id IN (SELECT job_id FROM full_update_steps s JOIN full_updates f ON f.id=s.full_id WHERE f.state='failed')").run();
   const row = await env.DB.prepare('SELECT id,state,error,source_sha,created_at,updated_at,validate_only FROM full_updates WHERE device_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').bind(device(env)).first();
   if (!row) return null;
   const steps = await env.DB.prepare('SELECT s.position,s.target,s.kind,j.state,j.error FROM full_update_steps s LEFT JOIN ota_jobs j ON j.id=s.job_id WHERE full_id=? ORDER BY position').bind(row.id).all();
+  const failed = steps.results.find(step => ['failed', 'expired', 'cancelled'].includes(step.state));
+  if (row.state === 'installing' && failed) {
+    row.state = 'failed'; row.error = failed.target + ': ' + (failed.error || failed.state); row.updated_at = now;
+    await env.DB.prepare("UPDATE full_updates SET state='failed',error=?,updated_at=? WHERE id=? AND state='installing'").bind(row.error, now, row.id).run();
+  }
   return { ...row, steps: steps.results, buildUrl: 'https://github.com/' + env.GITHUB_REPOSITORY + '/actions/workflows/full-update.yml' };
 }
 function checkHardware(env, state) {
@@ -82,8 +88,7 @@ export async function fullUpdateApi(request, env, { administrator, checkOrigin, 
     }
     const current = await fullUpdateState(env, now);
     if (fullUpdateActive(current)) throw fail('A full update is already in progress', 409);
-    // Existing controllers without a branch field use the normal RF release.
-    // Direct-drive controllers must keep building their matching calibration.
+    // Retain the installed RF / direct-drive calibration when building remotely.
     const sourceRef = family(env) === 'LUMIAC' ? (remote.status?.sourceBranch || env.GITHUB_REF) : env.GITHUB_REF;
     if (family(env) === 'LUMIAC' && !['RF', 'onetoone'].includes(sourceRef)) throw fail('Unknown firmware source branch', 409);
     const commit = await github(env, upstream, '/commits/' + encodeURIComponent(sourceRef));

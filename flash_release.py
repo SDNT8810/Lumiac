@@ -11,9 +11,15 @@ def main():
     parser.add_argument('target', choices=['verify', 'esp12', 'esp32', 'octopus'])
     parser.add_argument('--port')
     parser.add_argument('--sd', type=Path)
+    parser.add_argument('--host', help='Update over the local hotspot/LAN, for example 192.168.4.1')
     args = parser.parse_args()
     verify()
     if args.target == 'verify': return
+    if args.host:
+        if args.port or args.sd: parser.error('Choose --host for Wi-Fi or --port/--sd for USB/SD')
+        from local_update import install_targets
+        install_targets(args.host, [args.target])
+        return
     if args.target == 'octopus':
         if not args.sd or not args.sd.is_dir(): parser.error('Use --sd with the mounted microSD root, for example I:\\')
         shutil.copy2(OUTPUT / 'octopus.bin', args.sd / 'firmware.bin')

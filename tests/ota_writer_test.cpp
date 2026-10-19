@@ -1,6 +1,7 @@
 // Exercise the production activation boundary with flash/FS/hash SDK adapters.
 // Actual SHA-256/HMAC are supplied by mbedTLS/BearSSL on the compiled devices.
 #define LUMIAC_HOST_OTA_TEST
+#define LUMIAC_FIRMWARE_ID "LUMIAC1-test"
 #include "../shared/firmware_transfer.h"
 #include <cassert>
 #include <vector>
@@ -84,5 +85,20 @@ int main() {
 #else
   assert(!writer.begin("filesystem", app.size(), hash));
 #endif
+  for (unsigned fault = 0; fault < 5; ++fault) {
+    std::vector<uint8_t> marked(2048, 17); marked[0] = 0xE9;
+    const char* fields[] = {fault == 1 ? "LUMIAC_OTA_ROLE:wrong" : "LUMIAC_OTA_ROLE:esp12",
+      fault == 2 ? "LUMIAC1-wrong" : "LUMIAC1-test",
+      fault == 3 ? "2026-10-19.10" : "2026-10-19.1",
+      fault == 4 ? "removed-recovery" : "LUMIAC_LOCAL_OTA_V1"};
+    size_t offset = 64;
+    for (const auto* field : fields) { memcpy(marked.data()+offset, field, strlen(field)+1); offset += strlen(field)+1; }
+    assert(writer.begin("app", marked.size(), mockHash(marked.data(), marked.size()), "esp12", "2026-10-19.1"));
+    for (offset = 0; offset < marked.size(); offset += 17)
+      assert(writer.write(marked.data()+offset, std::min(size_t(17), marked.size()-offset)));
+    assert(!Update.activated);
+    if (fault) assert(!writer.finish() && !Update.activated);
+    else { assert(writer.verified() && !Update.activated); assert(writer.finish() && Update.activated); }
+  }
   std::cout << "Production image writer: fragmented headers, bad hashes, truncation, failed writes and activation guards passed\n";
 }

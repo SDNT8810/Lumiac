@@ -1,3 +1,4 @@
+import { saveDeviceDiagnostics, downloadDiagnostics } from './diagnostics.js';
 import { fullUpdateApi, fullUpdateState, fullUpdateActive, cancelFullUpdate, advanceFullUpdate } from './full-update.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { firmwareApi, firmwareDownload, syncFirmware } from './firmware.js';
@@ -86,7 +87,7 @@ async function deviceState(env, now) {
   const pending = await env.DB.prepare("SELECT COUNT(*) AS count FROM actions WHERE device_id = ? AND state = 'queued' AND expires_at > ?")
     .bind(env.LUMIAC_DEVICE_ID, now).first();
   const updates = await env.DB.prepare("SELECT COUNT(*) AS count FROM ota_jobs WHERE device_id = ? AND state IN ('queued','delivered') AND expires_at > ?").bind(env.LUMIAC_DEVICE_ID, now).first();
-  const update = await env.DB.prepare('SELECT id, state, error FROM ota_jobs WHERE device_id = ? ORDER BY created_at DESC LIMIT 1').bind(env.LUMIAC_DEVICE_ID).first();
+  const update = await env.DB.prepare('SELECT j.id,j.state,j.error,j.created_at AS createdAt,i.target,i.kind,i.revision FROM ota_jobs j JOIN ota_images i ON i.id=j.image_id WHERE j.device_id=? ORDER BY j.created_at DESC,j.rowid DESC LIMIT 1').bind(env.LUMIAC_DEVICE_ID).first();
   return { online: now - row.updated_at <= ONLINE_MS, updatedAt: new Date(row.updated_at).toISOString(), status: JSON.parse(row.status), queued: pending.count + updates.count, update, ...(fullUpdate ? { fullUpdate } : {}) };
 }
 
@@ -133,10 +134,11 @@ export function createGateway({ verifyToken = verifyFirebaseToken, upstream = fe
         if (firmwareResponse) return protect(firmwareResponse);
         const download = await firmwareDownload(request, env, () => authenticateDevice(request, env));
         if (download) return protect(download);
-        const apiMatch = pathname.match(/^\/api\/devices\/([^/]+)\/(status|actions)$/);
+        const apiMatch = pathname.match(/^\/api\/devices\/([^/]+)\/(status|actions|diagnostics)$/);
         if (apiMatch) {
           const username = await administrator(request, env, verifyToken);
           if (apiMatch[1] !== env.LUMIAC_DEVICE_ID) throw failure('Unknown device', 404);
+          if (apiMatch[2] === 'diagnostics' && request.method === 'GET') return protect(await downloadDiagnostics(env));
           if (apiMatch[2] === 'status' && request.method === 'GET') return protect(json(await deviceState(env, now)));
           if (apiMatch[2] === 'actions' && request.method === 'POST') {
             checkOrigin(request, env);
@@ -184,6 +186,7 @@ export function createGateway({ verifyToken = verifyFirebaseToken, upstream = fe
           // boot session. Keep only one day of receipts for diagnostics.
           await env.DB.prepare('DELETE FROM actions WHERE expires_at <= ? OR (device_id = ? AND session != ?)')
             .bind(now - 86400000, env.LUMIAC_DEVICE_ID, status.session).run();
+          await saveDeviceDiagnostics(env, status, now);
           const update = await syncFirmware(env, status, now, action, () => advanceFullUpdate(env, status, now));
           const outgoing = action ? { ...JSON.parse(action.payload), id: action.id, type: action.type, session: action.session } : null;
           return protect(json(update ? { action: outgoing, update } : { action: outgoing }));
