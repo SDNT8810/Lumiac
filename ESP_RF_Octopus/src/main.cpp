@@ -2153,7 +2153,9 @@ void setup() {
   WiFi.setSleepMode(WIFI_NONE_SLEEP);
   WiFi.hostname(kBoardName);
 #else
-  WiFi.setSleep(false);
+  // ESP-IDF 4.4 aborts during Classic Bluetooth startup with WIFI_PS_NONE.
+  // Keep minimum modem sleep so Wi-Fi and Bluetooth can share the radio.
+  WiFi.setSleep(WIFI_PS_MIN_MODEM);
   WiFi.setHostname(kBoardName);
 #endif
   if (!WiFi.mode(WIFI_AP_STA)) traceBoot("ERROR: Wi-Fi AP/station mode failed");

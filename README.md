@@ -15,9 +15,11 @@ checksums are in `firmware/`. Leave the Octopus microSD installed.
 connect the PC to Lumiac Wi-Fi and run `python local_update.py --target all`.
 Cloud and USB/SD remain available. See [all three update methods](Docs/local-updates.md).
 
-Release **2026-10-22.1** improves router setup, keeps a saved password when the
-same Wi-Fi name is resubmitted with a blank field, and exposes Wi-Fi disconnect
-reasons. See [ESP32 with no hotspot](Docs/esp32-recovery.md) and
+Release **2026-10-22.2** fixes an ESP32 reboot during Bluetooth startup that
+made its hotspot disappear. Wi-Fi now keeps the modem-sleep mode required for
+Bluetooth coexistence. Router setup also keeps a saved password when the same
+Wi-Fi name is resubmitted with a blank field and exposes disconnect reasons.
+See [ESP32 with no hotspot](Docs/esp32-recovery.md) and
 [noise after the 1:1 conversion](Docs/quiet-mode.md).
 
 Lumiac is the control stack for a six-axis hexapod/spider robot built around a BIGTREETECH Octopus v1.1 and an ESP-12S or ESP32 controller. It includes customized Marlin firmware, a Wi-Fi/RF bridge, motion programs embedded in ESP flash, a browser control panel, and a local motion simulator.

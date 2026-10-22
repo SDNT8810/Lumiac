@@ -18,6 +18,35 @@ The current `esp32dev` firmware is for an **original ESP32 with 4 MB flash** and
 Classic Bluetooth (for example ESP32-WROOM-32). It is not an ESP32-C3 or ESP32-S3
 image. Confirm the module marking before choosing the firmware.
 
+## Confirmed Wi-Fi/Bluetooth startup crash
+
+The October 22 USB log showed Wi-Fi entering AP/station mode, followed by
+`Error! Should enable WiFi modem sleep` during Bluetooth initialization and
+an `abort()`/reboot loop. The hotspot was starting, but the controller reset
+before it stayed available. The released code had disabled Wi-Fi modem sleep.
+
+Firmware **2026-10-22.2**, Git release **v1.0.1**, explicitly uses
+`WIFI_PS_MIN_MODEM` on ESP32 before starting Wi-Fi and Bluetooth. ESP-IDF 4.4
+does not allow modem sleep to be disabled in Wi-Fi/Bluetooth coexistence mode;
+see [the SDK power-saving requirements](https://docs.espressif.com/projects/esp-idf/en/v4.4.7/esp32/api-guides/wifi.html#esp32-wi-fi-power-saving-mode).
+The ESP8266 path keeps its existing sleep setting and does not initialize
+Bluetooth. This ESP32 crash does not diagnose a separate ESP12 failure.
+
+To select the exact fixed 1:1 package on a PC that already has Lumiac cloned:
+
+```powershell
+git fetch origin --tags
+git switch --detach v1.0.1
+python flash_release.py verify
+python flash_release.py esp32 --port COM3
+```
+
+Use the ESP32's actual port. No rebuild is needed to install the committed
+images. Exit any serial monitor before uploading. With the ESP32 isolated from
+Octopus, capture startup at 115200 baud and confirm it reaches
+`[Boot] Startup complete; entering controller loop` without repeated resets.
+Then check Lumiac Wi-Fi and `/api/network` on the physical board.
+
 ## Install the complete verified image set
 
 After obtaining the matching 1:1 package, run from the project directory:

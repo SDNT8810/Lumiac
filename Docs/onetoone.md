@@ -25,7 +25,7 @@ For buzzing or jerky motion after this conversion, see the
 
 ## Install the prebuilt release on another Windows PC
 
-Release **2026-10-22.1** includes matching Octopus, ESP-12S and ESP32 images.
+Release **2026-10-22.2** includes matching Octopus, ESP-12S and ESP32 images.
 The gear setting is already 1:1; no source edits or rebuild are needed to install
 the committed package. Open PowerShell in the folder where you keep projects:
 
