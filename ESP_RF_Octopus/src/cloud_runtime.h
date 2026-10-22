@@ -17,7 +17,7 @@ OtaWriter cloudWriter;
 File octopusUpdateFile;
 unsigned sdPhase = 0, sdRetries = 0;
 uint32_t sdOffset = 0, sdExpectedOffset = 0, sdSentAt = 0;
-String sdLastCommand, sdExpectedReply;
+String sdLastCommand, sdExpectedReply, sdLastReply;
 bool sdWaiting = false;
 #if defined(ESP8266)
 BearSSL::WiFiClientSecure cloudTls;
@@ -35,6 +35,7 @@ String lastControlFault, controllerResetReason;
 uint32_t controlFaultCount = 0, controlFaultAt = 0;
 bool cloudTransportBusy() { return cloudInFlight; }
 #include "persistent_diagnostics.h"
+#include "network_connection.h"
 
 bool saveCloudSettings() {
   if (!cloudStorageReady) return false;
@@ -84,16 +85,21 @@ void writeRemoteState(JsonDocument& doc) {
   reliability["uptimeMs"] = millis(); reliability["freeHeap"] = ESP.getFreeHeap();
 #if defined(ESP8266)
   reliability["largestHeapBlock"] = ESP.getMaxFreeBlockSize();
+#else
+  reliability["largestHeapBlock"] = ESP.getMaxAllocHeap();
 #endif
   reliability["cloudBusy"] = cloudInFlight; reliability["cloudFailures"] = cloudFailures;
   reliability["cloudRequestMs"] = cloudLastElapsed;
   reliability["diagnosticWriteFailures"] = diagnosticWriteFailures;
   JsonObject wifi = doc["wifi"].to<JsonObject>();
   wifi["ssid"] = cloudSsid; wifi["connected"] = WiFi.status() == WL_CONNECTED;
+  wifi["passwordSaved"] = !cloudPassword.isEmpty(); wifi["pending"] = wifiConnectionPending;
+  wifi["statusCode"] = int(WiFi.status()); wifi["attempts"] = wifiAttempts;
+  wifi["disconnectReason"] = wifiDisconnectReason.load(std::memory_order_relaxed);
   wifi["ip"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String();
   wifi["gateway"] = WiFi.gatewayIP().toString(); wifi["dns"] = WiFi.dnsIP().toString();
   wifi["rssi"] = WiFi.RSSI(); wifi["utcEpoch"] = time(nullptr);
-  wifi["cloud"] = cloudState; wifi["error"] = cloudError;
+  wifi["cloud"] = cloudState; wifi["error"] = WiFi.status() == WL_CONNECTED ? cloudError : networkWifiError();
   JsonObject ota = doc["ota"].to<JsonObject>();
   ota["supported"] = cloudStorageReady; ota["sdSupported"] = octopusSdOta;
   ota["localSupported"] = true; ota["localMarker"] = "LUMIAC_LOCAL_OTA_V1";
@@ -121,7 +127,7 @@ void failRemoteUpdate(const String& error) {
   // A late UART error must not close that connection from the hardware loop.
   if (otaOpenInFlight) { otaDeferredError = error; firmwareUpdateCancel = true; return; }
   cloudWriter.abort(); octopusUpdateFile.close(); closeCloudHttp();
-  if (remoteUpdate.kind == "octopus" && sdPhase < 5) octopusSerial.println("M997 P4");
+  if (remoteUpdate.kind == "octopus" && sdPhase < 5) { octopusSerial.println(); octopusSerial.println("M997 P4"); }
   remoteUpdate.state = "failed"; remoteUpdate.phase = ""; remoteUpdate.error = error;
   firmwareUpdating = false; firmwareUpdateCancel = false; pendingUpdateBoot = false;
   saveCloudSettings(); lastCloudPoll = 0;
@@ -142,9 +148,21 @@ bool handleFirmwareLine(const String& raw) {
   if (line.startsWith("LUMIAC_MACHINE:")) octopusCloudIdentity = line.substring(strlen("LUMIAC_MACHINE:"));
   if (!firmwareUpdating) return false;
   if (line == updateIdleMarker) updateIdleConfirmed = true;
-  if (line.startsWith("LUMIAC_FW_ERROR ")) { failRemoteUpdate(line); return true; }
-  if (sdWaiting && ((sdExpectedReply == "offset" && line == "LUMIAC_FW_OFFSET " + String(sdExpectedOffset)) || line == sdExpectedReply))
+  if (sdPhase && line.length()) sdLastReply = line.substring(0, 100);
+  if (line == "start" && sdPhase && sdPhase < 5) {
+    octopusHomed = octopusFirmwareReady = octopusOnline = octopusRealtime = octopusMotionFan = false;
+    failRemoteUpdate("Octopus restarted during SD transfer at byte " + String(remoteUpdate.done)); return true;
+  }
+  if (line.startsWith("LUMIAC_FW_ERROR ") || (sdPhase && (line.startsWith("Error:") || line.startsWith("Unknown command:")))) {
+    // A leading delimiter can finish a stale partial command. Its error must
+    // be fenced by the following fresh abort ACK before opening a new file.
+    if (sdPhase == 1 && sdExpectedReply == "LUMIAC_FW_ABORTED") return true;
+    failRemoteUpdate(line); return true;
+  }
+  if (sdWaiting && ((sdExpectedReply == "offset" && line == "LUMIAC_FW_OFFSET " + String(sdExpectedOffset)) || line == sdExpectedReply)) {
+    if (sdExpectedReply == "offset") { sdOffset = sdExpectedOffset; remoteUpdate.done = sdOffset; }
     sdWaiting = false;
+  }
   return line.startsWith("LUMIAC_FW_");
 }
 void startRemoteUpdate(JsonVariantConst job) {
@@ -163,7 +181,7 @@ void startRemoteUpdate(JsonVariantConst job) {
   handleSimpleAction("stop_motion", "Firmware update");
   firmwareUpdating = true; firmwareUpdateCancel = false; updateIdleConfirmed = false;
   remoteUpdate.state = "stopping"; remoteUpdate.phase = "waiting for Octopus to stop";
-  updateSince = millis(); sdPhase = 0; sdWaiting = false;
+  updateSince = millis(); sdPhase = 0; sdWaiting = false; sdLastReply = "";
   saveUpdateCheckpoint(true);
   updateIdleMarker = "LUMIAC_OTA_IDLE_" + remoteUpdate.id;
   octopusSerial.println(";F001"); // Preserve idle cooling while drivers hold.
@@ -199,6 +217,7 @@ bool startFirmwareDownload() {
 }
 void sdCommand(const String& line, const String& reply, uint32_t offset = 0) {
   sdLastCommand = line; sdExpectedReply = reply; sdExpectedOffset = offset;
+  if (line == "M997 P4") octopusSerial.println(); // Clear any abandoned partial line.
   sdWaiting = true; sdRetries = 0; sdSentAt = millis(); octopusSerial.println(line);
 }
 void tickOctopusUpdate() {
@@ -210,25 +229,30 @@ void tickOctopusUpdate() {
     return;
   }
   if (sdWaiting) {
-    if (millis() - sdSentAt > 2000) {
-      if (++sdRetries > 4) { failRemoteUpdate("Octopus transfer acknowledgement timed out"); return; }
-      sdSentAt = millis(); octopusSerial.println(sdLastCommand);
+    const uint32_t acknowledgementMs = sdPhase == 3 ? 30000 : 10000;
+    if (millis() - sdSentAt > acknowledgementMs) {
+      if (++sdRetries > 4) {
+        failRemoteUpdate("Octopus SD ACK timed out at " + String(remoteUpdate.done) + "/" + String(remoteUpdate.size) +
+          "; stage " + remoteUpdate.phase + "; last reply: " + (sdLastReply.length() ? sdLastReply : String("none"))); return;
+      }
+      sdSentAt = millis(); if (sdLastCommand == "M997 P4") octopusSerial.println(); octopusSerial.println(sdLastCommand);
     }
     return;
   }
-  if (sdPhase == 0) { sdCommand("M997 P4", "LUMIAC_FW_ABORTED"); sdPhase = 1; return; }
+  if (sdPhase == 0) { remoteUpdate.phase = "resynchronizing Octopus UART"; sdCommand("M997 P4", "LUMIAC_FW_ABORTED"); sdPhase = 1; return; }
   if (sdPhase == 1) {
-    sdCommand("M997 P0 S" + String(remoteUpdate.size) + " C" + String(remoteUpdate.crc32), "offset", 0); sdPhase = 2; return;
+    remoteUpdate.phase = "writing SD via UART (16-byte blocks)";
+    sdCommand("M997 P0 " + String(remoteUpdate.size) + " " + String(remoteUpdate.crc32), "offset", 0); sdPhase = 2; return;
   }
   if (sdPhase == 2 && sdOffset < remoteUpdate.size) {
-    uint8_t bytes[lumiac::firmwareBlockBytes];
+    uint8_t bytes[lumiac::firmwareUartBlockBytes];
     const unsigned wanted = min(unsigned(sizeof(bytes)), unsigned(remoteUpdate.size - sdOffset));
     if (!octopusUpdateFile.seek(sdOffset) || octopusUpdateFile.read(bytes, wanted) != int(wanted)) { failRemoteUpdate("Staged firmware read failed"); return; }
     const uint32_t crc = lumiac::firmwareCrc(0xFFFFFFFFUL, bytes, wanted) ^ 0xFFFFFFFFUL;
-    sdCommand("M997 P1 S" + String(sdOffset) + " C" + String(crc) + " D" + otaHex(bytes, wanted), "offset", sdOffset + wanted);
-    sdOffset += wanted; remoteUpdate.done = sdOffset; return;
+    sdCommand("M997 P1 " + String(sdOffset) + " " + String(crc) + " " + otaHex(bytes, wanted), "offset", sdOffset + wanted);
+    return; // Advance progress only when this exact block is acknowledged.
   }
-  if (sdPhase == 2) { sdCommand("M997 P2", "LUMIAC_FW_VERIFIED"); sdPhase = 3; return; }
+  if (sdPhase == 2) { remoteUpdate.phase = "verifying complete SD image by readback"; sdCommand("M997 P2", "LUMIAC_FW_VERIFIED"); sdPhase = 3; return; }
   if (sdPhase == 3) {
     // Activation is sent once. Never replay a reset when its acknowledgement is lost.
     sdPhase = 5; remoteUpdate.phase = "waiting for Octopus restart";
@@ -333,15 +357,8 @@ void tickCloud() {
     }
     delete reply; lastCloudPoll = millis();
   }
-  if (cloudSsid.isEmpty()) return;
-  if (cloudInFlight) return;
-  if (WiFi.status() != WL_CONNECTED) {
-    // Router scans can change the AP channel. Preserve the local OTA connection.
-    if (firmwareUpdating) return;
-    cloudState = "connecting to Wi-Fi";
-    if (now - lastWifiAttempt > 20000) { lastWifiAttempt = now; WiFi.begin(cloudSsid.c_str(), cloudPassword.c_str()); }
-    return;
-  }
+  tickNetworkConnection();
+  if (cloudSsid.isEmpty() || cloudInFlight || wifiConnectionPending || WiFi.status() != WL_CONNECTED) return;
   if (time(nullptr) < 1700000000) { cloudState = "waiting for internet time"; return; }
   // OTA owns HTTPS exclusively while downloading, and only runs with motion parked.
   if (remoteUpdate.state == "opening" || remoteUpdate.state == "downloading" || updateRebootAt || (lastCloudPoll && now - lastCloudPoll < cloudPollInterval)) return;
@@ -350,21 +367,27 @@ void tickCloud() {
 #if defined(ESP8266)
   if (ESP.getFreeHeap() < 28000 || ESP.getMaxFreeBlockSize() < 18000) {
 #else
-  if (ESP.getFreeHeap() < 50000) {
+  if (ESP.getFreeHeap() < 96000 || ESP.getMaxAllocHeap() < 32768) {
 #endif
     cloudError = "Cloud sync deferred: low free memory"; return;
   }
-  JsonDocument packet; fillStateDocument(packet);
-  writeDiagnosticBatch(packet["diagnostics"].to<JsonArray>());
   CloudExchange* exchange = new (std::nothrow) CloudExchange;
   if (!exchange) { cloudError = "Cloud sync deferred: low free memory"; return; }
-  exchange->payload = "{\"status\":"; serializeJson(packet, exchange->payload); exchange->payload += '}';
+  {
+    JsonDocument packet; fillStateDocument(packet);
+    writeDiagnosticBatch(packet["diagnostics"].to<JsonArray>());
+    if (packet.overflowed() || !exchange->payload.reserve(measureJson(packet) + 11)) {
+      delete exchange; cloudError = "Cloud status deferred: low free memory"; return;
+    }
+    exchange->payload = "{\"status\":"; serializeJson(packet, exchange->payload); exchange->payload += '}';
+  } // Release JSON storage before the worker can allocate TLS buffers.
   if (submitCloudExchange(exchange)) cloudInFlight = true;
   else { delete exchange; cloudError = "Cloud worker busy"; }
 }
 
 void beginCloud() {
   cloudTransportReady = configureCloudTransport();
+  configureNetworkEvents();
 #if defined(ESP8266)
   controllerResetReason = ESP.getResetReason();
 #else
@@ -402,7 +425,7 @@ void beginCloud() {
   }
   if (firmwareParked) cancelStartupAutomation(kBoardName, "firmware-update parked state");
   configTime(0, 0, "time.cloudflare.com", "pool.ntp.org");
-  if (!cloudSsid.isEmpty()) { WiFi.begin(cloudSsid.c_str(), cloudPassword.c_str()); lastWifiAttempt = millis(); }
+  if (!cloudSsid.isEmpty()) scheduleWifiConnection();
 }
 void handleNetworkState() { JsonDocument doc; writeRemoteState(doc); String body; serializeJson(doc, body); server.sendHeader("Cache-Control", "no-store"); server.send(200, "application/json", body); }
 void handleNetworkSave() {
@@ -410,23 +433,21 @@ void handleNetworkSave() {
   if (server.arg("plain").length() > 1024 || deserializeJson(doc, server.arg("plain"))) { server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}"); return; }
   if (firmwareUpdating) { server.send(409, "application/json", "{\"error\":\"Firmware update in progress\"}"); return; }
   const String ssid = doc["ssid"] | "", password = doc["password"] | "";
-  if (!doc["ssid"].is<const char*>() || ssid.isEmpty() || ssid.length() > 32 || (!password.isEmpty() && (password.length() < 8 || password.length() > 63))) {
-    server.send(400, "application/json", "{\"error\":\"Use a Wi-Fi name up to 32 bytes and a password of 8-63 characters\"}"); return;
+  if (!doc["ssid"].is<const char*>() || (!doc["password"].isNull() && !doc["password"].is<const char*>()) ||
+      (!doc["openNetwork"].isNull() && !doc["openNetwork"].is<bool>())) {
+    server.send(400, "application/json", "{\"error\":\"Invalid Wi-Fi settings\"}"); return;
+  }
+  const bool openNetwork = doc["openNetwork"] | false;
+  if (const char* error = networkSettingsError(ssid, password, openNetwork)) {
+    JsonDocument failure; failure["error"] = error; String body; serializeJson(failure, body);
+    server.send(400, "application/json", body); return;
   }
   const String oldSsid = cloudSsid, oldPassword = cloudPassword;
-  cloudSsid = ssid; cloudPassword = password;
+  cloudSsid = ssid;
+  if (openNetwork) cloudPassword = "";
+  else if (!password.isEmpty()) cloudPassword = password;
   if (!saveCloudSettings()) { cloudSsid = oldSsid; cloudPassword = oldPassword; server.send(500, "application/json", "{\"error\":\"Cannot save Wi-Fi settings\"}"); return; }
-  cloudState = "connecting to Wi-Fi"; cloudError = ""; WiFi.begin(cloudSsid.c_str(), cloudPassword.c_str()); lastWifiAttempt = millis();
+  scheduleWifiConnection();
   handleNetworkState();
 }
-void handleNetworkPage() {
-  static const char page[] PROGMEM = R"HTML(<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Lumiac Internet connection</title><style>body{font:17px system-ui;max-width:600px;margin:40px auto;padding:20px;background:#e9e4da;color:#263831}label,input,button{display:block;margin:12px 0}input,button{padding:12px;font:inherit}input{width:90%}a{color:inherit}</style>
-<h1>Lumiac remote access</h1><p>Connect this controller to a 2.4 GHz router. The Lumiac local Wi-Fi remains available.</p>
-<form id="network"><label>Wi-Fi name<input id="ssid" maxlength="32" required></label><label>Wi-Fi password<input id="password" type="password" maxlength="63" autocomplete="new-password"></label><button>Save and connect</button></form><p id="state" role="status"></p>
-<details><summary>Connection details</summary><pre id="diagnostics" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
-<p>Local firmware updates: connect the PC to Lumiac Wi-Fi, then run <code>python local_update.py --target all</code> from the project folder. <a href="/api/diagnostics">Download diagnostic log</a>.</p>
-<p>Remote panel: <a href="https://lumiac.control.timiac.it">lumiac.control.timiac.it</a></p><a href="/">Back to dashboard</a>
-<script>const $=id=>document.getElementById(id);async function refresh(){try{const r=await fetch('/api/network',{cache:'no-store'}),s=await r.json();$('state').textContent=(s.wifi.connected?'Router connected. ':'Router disconnected. ')+(s.wifi.cloud||'')+(s.wifi.error?' - '+s.wifi.error:'');$('diagnostics').textContent=[s.controller+' / '+s.software+' / '+s.sourceBranch,'IP: '+s.wifi.ip,'Gateway: '+s.wifi.gateway,'DNS: '+s.wifi.dns,'Signal: '+s.wifi.rssi+' dBm','UTC: '+(s.wifi.utcEpoch?new Date(s.wifi.utcEpoch*1000).toISOString():'not synchronized'),'Free RAM: '+s.reliability.freeHeap+' bytes','Largest block: '+(s.reliability.largestHeapBlock??'n/a'),'Last request: '+s.reliability.cloudRequestMs+' ms'].join('\n');if(!$('ssid').value)$('ssid').value=s.wifi.ssid||'';}catch(e){$('state').textContent=e.message;}}$('network').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/api/network',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:$('ssid').value,password:$('password').value})}),s=await r.json();if(!r.ok)throw Error(s.error);$('password').value='';await refresh();}catch(e){$('state').textContent=e.message;}};refresh();setInterval(refresh,3000);</script></html>)HTML";
-  server.send_P(200, "text/html; charset=utf-8", page);
-}
+#include "network_page.h"

@@ -15,6 +15,11 @@ checksums are in `firmware/`. Leave the Octopus microSD installed.
 connect the PC to Lumiac Wi-Fi and run `python local_update.py --target all`.
 Cloud and USB/SD remain available. See [all three update methods](Docs/local-updates.md).
 
+Release **2026-10-22.1** improves router setup, keeps a saved password when the
+same Wi-Fi name is resubmitted with a blank field, and exposes Wi-Fi disconnect
+reasons. See [ESP32 with no hotspot](Docs/esp32-recovery.md) and
+[noise after the 1:1 conversion](Docs/quiet-mode.md).
+
 Lumiac is the control stack for a six-axis hexapod/spider robot built around a BIGTREETECH Octopus v1.1 and an ESP-12S or ESP32 controller. It includes customized Marlin firmware, a Wi-Fi/RF bridge, motion programs embedded in ESP flash, a browser control panel, and a local motion simulator.
 
 > **Hardware warning:** This project controls high-current stepper drivers and moving machinery. Test with the robot raised or the motors disconnected, keep an emergency power cut-off within reach, and verify every pin and current limit before applying motor power.
@@ -120,9 +125,9 @@ python build.py
 
 `python build.py marlin --build-only` compiles Marlin without modifying an SD card. Running the helper without arguments retains the original build-and-copy behavior.
 
-The optional `python build.pt marlin-max --build-only` builds the **256-microstep / 3.0 A RMS test profile**, with separate output at `Marlin/marlin-2.1.2.6/.pio/build/STM32F446ZE_btt_max_power/firmware.bin`. The normal build also uses 256 microsteps, with 2.5 A RMS run current. See [driver tuning](Docs/driver-tuning.md) for cooling requirements and the motion settings.
+The compatibility command `python build.pt marlin-max --build-only` uses a separate output at `Marlin/marlin-2.1.2.6/.pio/build/STM32F446ZE_btt_max_power/firmware.bin`. Both current profiles use **32 commanded microsteps, interpolation to 256, and 3.0 A RMS run current**. See [driver tuning](Docs/driver-tuning.md) for cooling requirements and the motion settings.
 
-On Windows it also looks for an SD card at `E:\`. To use another mounted path, set `OCTOPUS_SD_ROOT` before running it:
+On Windows it also looks for an SD card at `I:\`. To use another mounted path, set `OCTOPUS_SD_ROOT` before running it:
 
 ```powershell
 $env:OCTOPUS_SD_ROOT = "F:\"

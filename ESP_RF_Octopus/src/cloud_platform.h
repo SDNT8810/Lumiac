@@ -1,6 +1,7 @@
 #pragma once
 #include <time.h>
 #include <new>
+#include <atomic>
 #if defined(ESP8266)
 #include <LittleFS.h>
 #define LUMIAC_FS LittleFS

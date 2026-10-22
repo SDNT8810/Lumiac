@@ -5,6 +5,9 @@ On the `onetoone` branch, the configurable 1:1 drive uses approximately
 notes below describe the normal `RF` build. Follow [the gearing guide](onetoone.md)
 and install matching ESP and Octopus firmware when switching calibration.
 
+For the exact before/after settings and a reversible StealthChop comparison,
+see [noise after the 1:1 conversion](quiet-mode.md).
+
 ## Octopus-only 30% motion reduction
 
 The current Octopus firmware applies **70% of the planned speed and acceleration** to every move, including random programs, POS, manual moves and homing. Updating the ESP32 is unnecessary. `LUMIAC_MOTION_PERCENT` in `Configuration.h` sets this factor; it is applied after the motion planner's axis limits, before the acceleration profile is calculated.

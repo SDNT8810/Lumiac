@@ -7,6 +7,11 @@
 namespace lumiac {
 constexpr uint32_t octopusFirmwareLimit = 512UL * 1024 - 32UL * 1024;
 constexpr unsigned firmwareBlockBytes = 64;
+// Keep a whole hex-encoded command inside the STM32 UART's 63 usable RX bytes.
+// The receiver's 64-byte maximum stays compatible with existing firmware.
+constexpr unsigned firmwareUartBlockBytes = 16;
+static_assert(octopusFirmwareLimit < 1000000UL && 8 + 6 + 1 + 10 + 1 + 2 * firmwareUartBlockBytes + 1 <= 63,
+              "SD firmware command must fit the installed UART receive ring");
 inline uint32_t firmwareCrc(uint32_t crc, const uint8_t* data, size_t size) {
   while (size--) {
     crc ^= *data++;

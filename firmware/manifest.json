@@ -1,23 +1,23 @@
 {
   "identity": "LUMIAC1-2e6f6c12730b",
-  "revision": "2026-10-19.1",
+  "revision": "2026-10-22.1",
   "branch": "onetoone",
   "images": {
     "esp12.bin": {
-      "size": 624624,
-      "sha256": "f1bdbb81766c5f840beb3c53456993d63cda8019d342946a16df23a37dfb8b9c"
+      "size": 630848,
+      "sha256": "7342c5926bc4af1261764f322397a3b06a8b2a7c7c081ea546bbbe3c8baa4108"
     },
     "esp32.bin": {
-      "size": 1576112,
-      "sha256": "e01f153fea8597c7f8cbf0c2337551de43869b3f526a649938399a1dcc9f4038"
+      "size": 1583648,
+      "sha256": "f6e7e9a7f1ff5f4af804987fdef2f40255a59e9f8648d38af0a7565856be7f65"
     },
     "octopus.bin": {
       "size": 131436,
-      "sha256": "d06ed2db395cd156526a35862253946e533c448d3670063414b0b7538dcf12af"
+      "sha256": "4928c164f2dca3bd425f732dde80ea7db282037ba2ff90829a1566858c3b4f0e"
     },
     "esp32_bootloader.bin": {
       "size": 25632,
-      "sha256": "4074c991db3fc8bf3eddd63c300ba3d9e00843861ea1925d2ef34620a6886fc2"
+      "sha256": "54aac3be1e3978fa0ea782d3d74255d25b2c6a9902fcb062ce6ad7358eefa059"
     },
     "esp32_partitions.bin": {
       "size": 3072,

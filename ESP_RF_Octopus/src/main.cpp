@@ -25,6 +25,13 @@ SET_LOOP_TASK_STACK_SIZE(12288);
 namespace {
 
 using namespace board;
+void traceBoot(const char* stage) {
+#if defined(ESP32)
+  Serial.printf("[Boot] %s\n", stage);
+#else
+  (void)stage; // ESP12 UART belongs to Octopus, never send debug text there.
+#endif
+}
 bool firmwareUpdating = false, firmwareUpdateCancel = false, firmwareParked = false;
 bool octopusSdOta = false;
 String octopusCloudRevision, octopusCloudIdentity;
@@ -2130,6 +2137,7 @@ void setup() {
 #if defined(ESP32)
   Serial.begin(115200);
 #endif
+  traceBoot("Lumiac " LUMIAC_FIRMWARE_REVISION " / " LUMIAC_FIRMWARE_BRANCH);
   initStringStorage();
   randomSeed(micros());
 
@@ -2138,6 +2146,7 @@ void setup() {
   setupRfInputs();
 
   beginOctopusSerial();
+  traceBoot("Octopus UART initialized; starting Wi-Fi");
 
 #if defined(ESP8266)
   WiFi.persistent(false);
@@ -2147,17 +2156,21 @@ void setup() {
   WiFi.setSleep(false);
   WiFi.setHostname(kBoardName);
 #endif
-  WiFi.mode(WIFI_AP_STA);
+  if (!WiFi.mode(WIFI_AP_STA)) traceBoot("ERROR: Wi-Fi AP/station mode failed");
   WiFi.softAPdisconnect(true);
   delay(50);
-  WiFi.softAPConfig(kApIp, kApGateway, kApSubnet);
-  WiFi.softAP(kApSsid, kApPassword, 1, false, kApMaxConnections);
+  if (!WiFi.softAPConfig(kApIp, kApGateway, kApSubnet)) traceBoot("ERROR: hotspot IP configuration failed");
+  traceBoot(WiFi.softAP(kApSsid, kApPassword, 1, false, kApMaxConnections) ?
+    "Hotspot Lumiac started at http://192.168.4.1" : "ERROR: hotspot start failed");
   dnsServer.start(kDnsPort, "*", WiFi.softAPIP());
 
   setupHttp();
   setupWebSocket();
+  traceBoot("HTTP routes ready; initializing Bluetooth");
   bluetooth_remote::begin();
+  traceBoot("Bluetooth initialization returned; initializing cloud storage and worker");
   beginCloud();
+  traceBoot("Startup complete; entering controller loop");
 
   logMessage(kBoardName, String("Access point ready at http://") + WiFi.softAPIP().toString());
   logMessage(kBoardName, "Lamp output delegated to Octopus M355 on the configured bed/heater output.");

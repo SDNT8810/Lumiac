@@ -1,5 +1,31 @@
 # Controller reliability, 2026-10-16
 
+## Router setup correction, 2026-10-21.1
+
+Saving a router configuration now returns its response before starting a Wi-Fi
+join. Joining uses a 1.5-second grace period and a 30-second retry interval;
+attempts wait for the current cloud request or local firmware transfer to finish.
+The shared radio can still change hotspot channel when it joins a router.
+
+A blank password keeps the existing password for the same Wi-Fi name. Changing
+to a password-free router is an explicit checkbox; a new router name requires a
+password or that selection. Previously the page cleared the password field after
+a save, and resubmitting that blank field erased the stored password.
+
+The setup page bounds requests at eight seconds, serializes status polling,
+explains local disconnects, and never automatically replays an uncertain save.
+Wi-Fi event reason codes and retry counts appear in Connection details; router
+connection and failure events also enter the persistent diagnostic journal.
+ESP32 USB output includes startup stages and hotspot-start errors. See
+[ESP32 recovery](esp32-recovery.md) if no hotspot appears at all.
+
+Host checks exercise the production connection scheduler on both controller
+families and the embedded setup page in a browser DOM. These checks cannot
+establish the cause of a particular physical controller's failure without its
+status or boot log. The changes require installing the new ESP firmware.
+
+## Earlier transport correction
+
 Slow DNS, TLS or gateway replies previously blocked the same loop that reads
 Octopus acknowledgements, streams the next move, and checks connection deadlines.
 A delayed reply could therefore look like a board failure. This is a software
